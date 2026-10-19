@@ -25,6 +25,9 @@ test -d "$app"
 test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Contents/Info.plist")" = dev.crossdesk.desktop.test
 "$app/Contents/MacOS/crossdesk-test-daemon" --profile-info | python3 -c 'import json,sys; assert json.load(sys.stdin)["test"]'
 /usr/bin/codesign --verify --deep --strict "$app"
+if [ "${GITHUB_ACTIONS:-}" = true ]; then
+  python3 scripts/check-macos-test-edition.py "$app/Contents/MacOS/crossdesk-test-daemon"
+fi
 mkdir -p "$out"
 ditto "$app" "$out/CrossDesk Test.app"
 cp scripts/Cleanup-CrossDesk-Test.command "$out/"
