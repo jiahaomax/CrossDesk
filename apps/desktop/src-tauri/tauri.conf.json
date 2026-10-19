@@ -1,0 +1,8 @@
+{
+ "$schema":"https://schema.tauri.app/config/2",
+ "productName":"CrossDesk","version":"0.3.0","identifier":"dev.crossdesk.desktop",
+ "build":{"beforeDevCommand":"npm run dev","devUrl":"http://localhost:1420","beforeBuildCommand":"npm run build","frontendDist":"../dist"},
+ "app":{"windows":[{"title":"CrossDesk","width":1200,"height":820,"minWidth":940,"minHeight":640}],"security":{"csp":"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src ipc: http://ipc.localhost"}},
+ "bundle":{"active":true,"targets":["nsis"],"icon":["icons/icon.ico","icons/icon.png"],"externalBin":["binaries/crossdesk-daemon"]}
+}
+

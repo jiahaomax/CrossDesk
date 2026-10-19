@@ -1,0 +1,12 @@
+[package]
+name = "crossdesk-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+test-profile = []
+
+[dependencies]
+serde.workspace = true
+

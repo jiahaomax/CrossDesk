@@ -1,0 +1,27 @@
+name: CrossDesk Test Mac packages
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/macos-test-*']
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: sh scripts/build-macos-test.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CrossDesk-Test-${{ runner.arch }}
+          path: dist/CrossDesk-Test-*-Mac-*.zip
+          if-no-files-found: error

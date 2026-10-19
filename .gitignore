@@ -1,0 +1,9 @@
+/target/
+/.tools/
+**/node_modules/
+**/dist/
+*.log
+/.crossdesk/
+/artifacts/
+apps/desktop/src-tauri/binaries/*
+*.tsbuildinfo

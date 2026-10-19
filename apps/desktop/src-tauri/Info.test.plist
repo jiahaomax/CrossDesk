@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>NSLocalNetworkUsageDescription</key><string>CrossDesk Test connects only to the separately paired test edition for keyboard and mouse sharing.</string>
+<key>NSBonjourServices</key><array><string>_crossdesk-test._tcp</string></array>
+</dict></plist>

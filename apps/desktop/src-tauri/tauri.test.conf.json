@@ -1,0 +1,6 @@
+{
+  "productName": "CrossDesk Test",
+  "identifier": "dev.crossdesk.desktop.test",
+  "app": {"windows": [{"title": "CrossDesk Test · 测试版", "width": 1200, "height": 820, "minWidth": 940, "minHeight": 640}]},
+  "bundle": {"externalBin": ["binaries/crossdesk-test-daemon"], "macOS": {"signingIdentity": "-", "infoPlist": "Info.test.plist"}}
+}
