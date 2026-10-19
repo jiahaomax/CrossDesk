@@ -5,7 +5,7 @@ test "$(uname -s)" = Darwin || { echo 'macOS build host required'; exit 1; }
 root="$PWD"
 arch=$(uname -m)
 case "$arch" in arm64|x86_64) ;; *) echo 'Unsupported architecture'; exit 1;; esac
-name="CrossDesk-Test-0.3.0-rc13-Mac-$arch"
+name="CrossDesk-Test-0.3.0-rc14-Mac-$arch"
 out="$root/dist/$name"
 test ! -e "$out" && test ! -e "$out.zip" || { echo 'Output already exists'; exit 1; }
 export CARGO_TARGET_DIR="$root/target/test-macos-build"
@@ -33,6 +33,6 @@ ditto "$app" "$out/CrossDesk Test.app"
 cp scripts/Cleanup-CrossDesk-Test.command "$out/"
 chmod +x "$out/Cleanup-CrossDesk-Test.command"
 cp docs/TEST_EDITION.md "$out/使用说明.md"
-printf 'CrossDesk Test 0.3.0 rc13\nmacOS %s\nAd-hoc signed; not notarized; native input acceptance pending\n' "$arch" > "$out/VERSION.txt"
+printf 'CrossDesk Test 0.3.0 rc14\nmacOS %s\nAd-hoc signed; not notarized; native input acceptance pending\n' "$arch" > "$out/VERSION.txt"
 ditto -c -k --sequesterRsrc --keepParent "$out" "$out.zip"
 echo "Ready: $out.zip"

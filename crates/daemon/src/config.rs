@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use crossdesk_core::*;
 use crossdesk_transport::{atomic_save, data_dir, PairLayout};
 use serde::{Deserialize, Serialize};
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Endpoint {
     pub peer: String,
     pub address: String,

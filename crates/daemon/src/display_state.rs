@@ -130,7 +130,12 @@ mod tests {
             }
             assert_eq!(shared.lock().unwrap().topology[0], old);
         });
-        let mut running = Some(Running { stop, task });
+        let (configure, _updates) = tokio::sync::mpsc::channel(1);
+        let mut running = Some(Running {
+            stop,
+            task,
+            configure,
+        });
         let mut version = 1;
         reconcile(&status, &mut running, "local", &mut version, Ok(topology()))
             .await

@@ -272,6 +272,11 @@ pub fn default_links(topologies: &[DeviceTopology]) -> Vec<EdgeLink> {
     links
 }
 
+pub struct Configure {
+    pub config: Config,
+    pub done: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+}
+
 struct Manager {
     id: String,
     config: Config,
@@ -295,6 +300,67 @@ struct Manager {
     restart_requested: bool,
 }
 impl Manager {
+    fn apply_tuning(&mut self, next: &Config) -> Result<()> {
+        let mut without_speed = next.tuning.clone();
+        without_speed.mouse_speed = self.config.tuning.mouse_speed;
+        if without_speed != self.config.tuning
+            || next.links != self.config.links
+            || next.same_subnet_only != self.config.same_subnet_only
+        {
+            self.cancel()?;
+        }
+        if let Some(source) = &self.source {
+            source
+                .mouse_speed
+                .store(next.tuning.mouse_speed.to_bits(), Ordering::Release);
+        }
+        Ok(())
+    }
+    fn configure(&mut self, mut next: Config) -> Result<()> {
+        next.sharing = self.config.sharing;
+        next.validate()?;
+        Layout {
+            topologies: self.status.lock().unwrap().topology.clone(),
+            links: next.links.clone(),
+        }
+        .validate()
+        .map_err(anyhow::Error::msg)?;
+        let peers = self
+            .status
+            .lock()
+            .unwrap()
+            .trusted
+            .iter()
+            .map(|p| p.id.clone())
+            .collect::<Vec<_>>();
+        crate::layout_sync::record_changes(&mut next, &self.config, &self.id, &peers)?;
+        crate::settings_sync::record_changes(&mut next, &self.config, &self.id)?;
+        let old = self.config.clone();
+        next.save()?;
+        self.apply_tuning(&next)?;
+        self.config = next.clone();
+        update(&self.status, |s| {
+            s.config = next;
+            s.last_error = None;
+        });
+        for id in self.peers.keys() {
+            if old.links != self.config.links {
+                self.send(
+                    id,
+                    Message::PairLayout(crate::layout_sync::snapshot(&self.config, &self.id, id)),
+                )?;
+            }
+            if crate::settings_sync::snapshot(&old) != crate::settings_sync::snapshot(&self.config)
+            {
+                self.send(
+                    id,
+                    Message::Settings(crate::settings_sync::snapshot(&self.config)),
+                )?;
+            }
+        }
+        self.publish();
+        Ok(())
+    }
     fn send(&self, id: &str, m: Message) -> Result<()> {
         self.send_at(id, Instant::now(), m)
     }
@@ -521,15 +587,24 @@ impl Manager {
             bail!("过期输入或切换请求已丢弃");
         }
         match m {
+            Message::PairLayout(incoming) => {
+                let topologies = self.status.lock().unwrap().topology.clone();
+                if let Some(next) =
+                    crate::layout_sync::merge(&self.config, &self.id, id, &incoming, topologies)?
+                {
+                    next.save()?;
+                    self.apply_tuning(&next)?;
+                    self.config = next.clone();
+                    update(&self.status, |s| s.config = next);
+                    self.publish();
+                }
+            }
             Message::Settings(incoming) => {
                 if let Some(next) = crate::settings_sync::merge(&self.config, &incoming)? {
-                    if next.tuning != self.config.tuning
-                        || next.same_subnet_only != self.config.same_subnet_only
-                    {
-                        self.cancel()?;
-                    }
-                    self.restart_requested = next.same_subnet_only != self.config.same_subnet_only;
                     next.save()?;
+                    self.apply_tuning(&next)?;
+                    self.restart_requested = next.same_subnet_only != self.config.same_subnet_only
+                        || next.tuning.lease_ms != self.config.tuning.lease_ms;
                     self.config = next.clone();
                     update(&self.status, |s| s.config = next);
                     for peer in self.peers.keys().filter(|peer| peer.as_str() != id) {
@@ -849,6 +924,7 @@ pub async fn run(
     status: SharedStatus,
     stop: Arc<AtomicBool>,
     observe_only: bool,
+    mut updates: mpsc::Receiver<Configure>,
 ) -> Result<()> {
     let trusted = load_trust(&data_dir())?;
     let listener = TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, config.port))
@@ -987,6 +1063,10 @@ pub async fn run(
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     let mut pulse = Instant::now();
     let result:Result<()>=async {loop {tokio::select! {
+        Some(request)=updates.recv()=>{
+            let result=manager.configure(request.config).map_err(|e|format!("{e:#}"));
+            let _=request.done.send(result);
+        },
         _=tick.tick()=>{
             if stop.load(Ordering::Acquire)||manager.restart_requested{break;}
             if let Some(n)=&manager.source {ensure!(!n.fault.load(Ordering::Acquire),"输入安全保护已触发。已暂停共享，请松开按键后恢复。");n.alive.store(n.started.elapsed().as_millis() as u64,Ordering::Release);}
@@ -1017,7 +1097,7 @@ pub async fn run(
                         next.save()?;s.config=next.clone();manager.config=next;
                     }
                     if let Some(next)=crate::settings_sync::merge(&s.config,&peer.settings)? {
-                        manager.restart_requested=next.same_subnet_only!=manager.config.same_subnet_only;
+                        manager.restart_requested=next.same_subnet_only!=manager.config.same_subnet_only||next.tuning.lease_ms!=manager.config.tuning.lease_ms;
                         next.save()?;s.config=next.clone();manager.config=next;
                     }
                     Ok(())

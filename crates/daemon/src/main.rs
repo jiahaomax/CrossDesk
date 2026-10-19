@@ -64,6 +64,7 @@ enum Command {
 struct Running {
     stop: Arc<AtomicBool>,
     task: tokio::task::JoinHandle<()>,
+    configure: tokio::sync::mpsc::Sender<peers::Configure>,
 }
 async fn stop_running(running: &mut Option<Running>) {
     if let Some(r) = running.take() {
@@ -225,11 +226,12 @@ async fn run() -> Result<()> {
                     let config=status.lock().unwrap().config.clone();let id=identity.clone();let shared=status.clone();
                     let stop=Arc::new(AtomicBool::new(false));let stopped=stop.clone();
                     update(&status,|s|s.enabled=config.sharing);
+                    let (configure, updates)=tokio::sync::mpsc::channel(8);
                     let task=tokio::spawn(async move{
-                        let result=peers::run(id,config,shared.clone(),stopped,observe_only).await;
+                        let result=peers::run(id,config,shared.clone(),stopped,observe_only,updates).await;
                         if let Err(e)=result {update(&shared,|s|{s.enabled=false;s.config.sharing=false;s.active=None;s.last_error=Some(format!("{e:#}"));s.state="已安全暂停 · 可以恢复共享".into();});let paused=shared.lock().unwrap().config.clone();let _=paused.save();}
                     });
-                    running=Some(Running{stop,task});
+                    running=Some(Running{stop,task,configure});
                 }
                 let s=status.lock().unwrap().clone();println!("{}",serde_json::to_string(&s)?);std::io::stdout().flush()?;
             },
@@ -256,9 +258,21 @@ async fn run() -> Result<()> {
                         Command::Pause=>{pairing.cancel(&status).await;stop_running(&mut running).await;let mut c=status.lock().unwrap().config.clone();c.sharing=false;c.save()?;update(&status,|s|{s.config=c;s.enabled=false;s.last_error=None;s.state="已暂停 · 输入已释放".into();s.active=None;});},
                         Command::Configure{mut config}=>{
                             config.validate()?;
-                            let port_changed=status.lock().unwrap().config.port!=config.port;
+                            let old=status.lock().unwrap().config.clone();
+                            // Sharing is a live operation, never restored from an old UI edit.
+                            config.sharing=old.sharing;
+                            let port_changed=old.port!=config.port;
+                            let reconnect=port_changed||old.endpoints!=config.endpoints||old.same_subnet_only!=config.same_subnet_only||old.tuning.lease_ms!=config.tuning.lease_ms;
                             let topologies=status.lock().unwrap().topology.clone();
                             crossdesk_core::Layout{topologies,links:config.links.clone()}.validate().map_err(anyhow::Error::msg)?;
+                            if !reconnect {
+                                if let Some(r)=running.as_ref().filter(|r|!r.task.is_finished()) {
+                                    let (done,result)=tokio::sync::oneshot::channel();
+                                    r.configure.send(peers::Configure{config,done}).await.map_err(|_|anyhow::anyhow!("连接后台已停止，请重试"))?;
+                                    tokio::time::timeout(Duration::from_secs(5),result).await.map_err(|_|anyhow::anyhow!("设置应用尚未确认，请稍后重试"))??.map_err(anyhow::Error::msg)?;
+                                    return Ok(());
+                                }
+                            }
                             stop_running(&mut running).await;
                             let old=status.lock().unwrap().config.clone();
                             let peers=status.lock().unwrap().trusted.iter().map(|p|p.id.clone()).collect::<Vec<_>>();

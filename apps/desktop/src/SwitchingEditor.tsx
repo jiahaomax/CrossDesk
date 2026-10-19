@@ -22,6 +22,6 @@ export function SwitchingEditor({status,links,disabled,onChange}:{status:Status;
     </div>
     {error&&<p className="validation-message" role="alert">{error}</p>}
     {unavailable?<p className="field-note">连接这台电脑后，可以调整方向。</p>:<p className="placement-result">{side?<>{switchingLabel(status)}：向{sideNames[side]}移出，反方向返回。</>:<>选择摆放方向，自动设置往返。</>}</p>}
-    <p className="field-note">保存后同步到这台已配对电脑。</p>
+    <p className="field-note">修改后自动同步。</p>
   </section>;
 }

@@ -43,6 +43,21 @@ fn desktop_rect(x: i32, y: i32, width: u32, height: u32, bounds: RECT) -> Result
     Ok(rect)
 }
 
+fn monitor_identity(
+    device_path: String,
+    adapter_high: i32,
+    adapter_low: u32,
+    target: u32,
+) -> String {
+    if !device_path.is_empty() {
+        return device_path;
+    }
+    // Virtual/forced display paths can have no PnP monitor name. The active CCD
+    // adapter+target still identifies a real system path. It may change after an
+    // adapter restart; normal topology invalidation then discards old control.
+    format!("ccd:{adapter_high:08x}:{adapter_low:08x}:{target}")
+}
+
 unsafe fn snapshot(id: &str, version: u64) -> Result<DeviceTopology> {
     let mut paths_len = 0;
     let mut modes_len = 0;
@@ -72,8 +87,12 @@ unsafe fn snapshot(id: &str, version: u64) -> Result<DeviceTopology> {
             DisplayConfigGetDeviceInfo(&mut target.header) == 0,
             "cannot obtain stable monitor identity"
         );
-        let monitor_id = string(&target.monitorDevicePath);
-        ensure!(!monitor_id.is_empty(), "monitor identity unavailable");
+        let monitor_id = monitor_identity(
+            string(&target.monitorDevicePath),
+            path.targetInfo.adapterId.HighPart,
+            path.targetInfo.adapterId.LowPart,
+            path.targetInfo.id,
+        );
 
         let mut source: DISPLAYCONFIG_SOURCE_DEVICE_NAME = zeroed();
         source.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
@@ -194,6 +213,25 @@ unsafe fn snapshot(id: &str, version: u64) -> Result<DeviceTopology> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unnamed_active_targets_keep_distinct_system_identities() {
+        assert_eq!(
+            monitor_identity("pnp-monitor".into(), 0, 1, 2),
+            "pnp-monitor"
+        );
+        assert_eq!(
+            monitor_identity(String::new(), 0, 1, 2),
+            "ccd:00000000:00000001:2"
+        );
+        assert_ne!(
+            monitor_identity(String::new(), 0, 1, 2),
+            monitor_identity(String::new(), 0, 1, 3)
+        );
+        assert_ne!(
+            monitor_identity(String::new(), 0, 1, 2),
+            monitor_identity(String::new(), 0, 2, 2)
+        );
+    }
     #[test]
     fn oriented_physical_mode_is_not_rotated_or_scaled_again() {
         for (x, y, w, h) in [

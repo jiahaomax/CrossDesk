@@ -101,3 +101,5 @@ kbd{font-family:inherit;font-size:13px;white-space:nowrap;padding:3px 7px;border
 .mouse-speed-control{display:flex;flex-direction:row;align-items:center;gap:12px;width:210px;flex-shrink:0}.mouse-speed-control input{width:150px;accent-color:var(--accent)}.mouse-speed-control output{min-width:48px;font-variant-numeric:tabular-nums}
 
 .setting-row>select{width:210px;flex:0 0 210px}.setting-row>div:first-child{min-width:0}
+
+.autosave-status{display:inline-flex;align-items:center;gap:12px;color:var(--text-secondary)}

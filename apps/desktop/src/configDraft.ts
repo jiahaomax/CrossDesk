@@ -7,6 +7,7 @@ type Field = typeof fields[number];
 export type Draft = {base: Config; value: Config; remote: Config; conflicts: Field[]};
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 export const isDirty = (draft: Draft | null) => !!draft && fields.some(key => !equal(draft.value[key], draft.remote[key]));
+export const editableKey = (config: Config | null) => JSON.stringify(config && fields.map(key => config[key]));
 // New saved values win for the fields that changed remotely. Unchanged polls
 // preserve typing; unrelated local edits survive through a field-wise rebase.
 function rebase(previous: unknown, local: unknown, incoming: unknown): unknown {
@@ -17,10 +18,12 @@ function rebase(previous: unknown, local: unknown, incoming: unknown): unknown {
   }
   return incoming;
 }
-export function receiveConfig(draft: Draft | null, incoming: Config): Draft {
+export function receiveConfig(draft: Draft | null, incoming: Config, acknowledged?: Config): Draft {
   if (!draft) return {base: incoming, value: incoming, remote: incoming, conflicts: []};
   const value = {...incoming};
-  for (const key of fields) Object.assign(value, {[key]: rebase(draft.remote[key], draft.value[key], incoming[key])});
+  // Our own older save can finish after a new edit. Compare that receipt with
+  // what was sent, so it cannot roll the newer edit back. External saves still win.
+  for (const key of fields) Object.assign(value, {[key]: rebase((acknowledged ?? draft.remote)[key], draft.value[key], incoming[key])});
   return {base: incoming, value, remote: incoming, conflicts: []};
 }
 export function editConfig(draft: Draft | null, value: Config): Draft {

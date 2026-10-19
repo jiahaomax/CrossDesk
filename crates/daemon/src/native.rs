@@ -30,6 +30,7 @@ pub enum SourceCommand {
     Cursor(Point),
 }
 pub struct SourceHandle {
+    pub mouse_speed: Arc<AtomicU64>,
     pub commands: SyncSender<SourceCommand>,
     pub stop: Arc<AtomicBool>,
     pub fault: Arc<AtomicBool>,
@@ -47,6 +48,8 @@ impl Drop for SourceHandle {
     }
 }
 pub fn source(mut session: ControlSession, events: Sender<(Instant, Vec<Action>)>) -> SourceHandle {
+    let mouse_speed = Arc::new(AtomicU64::new(session.tuning.mouse_speed.to_bits()));
+    let speed = mouse_speed.clone();
     let (tx, rx) = mpsc::sync_channel(32);
     let stop = Arc::new(AtomicBool::new(false));
     let s = stop.clone();
@@ -64,6 +67,7 @@ pub fn source(mut session: ControlSession, events: Sender<(Instant, Vec<Action>)
         let mut stopped = false;
         let mut last_motion = Instant::now();
         let handler = move |event: NativeEvent| -> bool {
+            session.tuning.mouse_speed = f64::from_bits(speed.load(Ordering::Acquire));
             let now = start.elapsed().as_millis() as u64;
             let mut actions = vec![];
             let mut suppress = session.remote() || session.phase == Phase::PreparingSwitch;
@@ -211,6 +215,7 @@ pub fn source(mut session: ControlSession, events: Sender<(Instant, Vec<Action>)
         }
     });
     SourceHandle {
+        mouse_speed,
         commands: tx,
         stop,
         fault,
