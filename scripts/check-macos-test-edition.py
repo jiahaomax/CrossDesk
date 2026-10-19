@@ -5,14 +5,17 @@ from pathlib import Path
 import platform
 import subprocess
 import sys
-import tempfile
 
 assert platform.system() == "Darwin" and os.environ.get("GITHUB_ACTIONS") == "true"
+assert os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
 exe = str(Path(sys.argv[1]).resolve())
-root = Path(tempfile.mkdtemp(prefix="crossdesk-isolation-"))
-env = dict(os.environ, HOME=str(root))
+root = Path.home()
+# Security.framework must keep the runner's real HOME/login Keychain. Changing
+# HOME can trigger a system Keychain dialog even for a new service. The runner
+# is disposable; refuse to touch any pre-existing production data directory.
+env = dict(os.environ)
 formal = root / "Library/Application Support/CrossDesk"
-formal.mkdir(parents=True)
+formal.mkdir(parents=True, exist_ok=False)
 for name in ("config.json", "trust.json", "identity.der", "identity.protected"):
     (formal / name).write_text("production sentinel " + name)
 account = "crossdesk-ci-sentinel-" + os.environ["GITHUB_RUN_ID"]

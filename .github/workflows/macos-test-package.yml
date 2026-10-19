@@ -5,6 +5,9 @@ on:
     branches: ['codex/macos-test-*']
 permissions:
   contents: read
+concurrency:
+  group: macos-test-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   package:
     strategy:
