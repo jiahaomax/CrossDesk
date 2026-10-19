@@ -141,6 +141,12 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 fn main() {
+    let context = tauri::generate_context!();
+    // Check before Tauri creates a WebView or touches its preference directory.
+    if context.config().identifier != APP_ID {
+        eprintln!("Application edition/configuration mismatch; application not started");
+        std::process::exit(1);
+    }
     if std::env::args().nth(1).as_deref() == Some("--profile-info") {
         println!(
             "{}",
@@ -305,7 +311,7 @@ fn main() {
             export_pairing,
             quit_app
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("CrossDesk desktop startup failed");
     app.run(|app, event| {
         if matches!(event, tauri::RunEvent::Exit) {
