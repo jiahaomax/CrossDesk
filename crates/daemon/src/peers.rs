@@ -1017,6 +1017,7 @@ pub async fn run(
                         next.save()?;s.config=next.clone();manager.config=next;
                     }
                     if let Some(next)=crate::settings_sync::merge(&s.config,&peer.settings)? {
+                        manager.restart_requested=next.same_subnet_only!=manager.config.same_subnet_only;
                         next.save()?;s.config=next.clone();manager.config=next;
                     }
                     Ok(())
