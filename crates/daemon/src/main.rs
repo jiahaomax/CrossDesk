@@ -6,8 +6,10 @@ mod input_delivery;
 mod layout_sync;
 mod native;
 mod network_policy;
+mod outbound_delivery;
 mod pairing;
 mod peers;
+mod settings_sync;
 mod source_cleanup;
 mod status;
 mod test_edition;
@@ -261,6 +263,7 @@ async fn run() -> Result<()> {
                             let old=status.lock().unwrap().config.clone();
                             let peers=status.lock().unwrap().trusted.iter().map(|p|p.id.clone()).collect::<Vec<_>>();
                             layout_sync::record_changes(&mut config,&old,&identity.id,&peers)?;
+                            settings_sync::record_changes(&mut config,&old,&identity.id)?;
                             config.save()?;
                             update(&status,|s|{s.config=config;s.last_error=None;s.state="配置已保存 · 正在重新连接".into();});
                             refresh_addresses(&status);

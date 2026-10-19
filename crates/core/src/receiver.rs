@@ -62,7 +62,7 @@ impl Receiver {
         topology: u64,
     ) -> Result<(), String> {
         if now >= self.deadline
-            || queued_ms > 100
+            || queued_ms >= self.lease_duration()
             || !self
                 .owner
                 .as_ref()

@@ -75,11 +75,8 @@ pub fn merge(
         "布局版本或数量无效"
     );
     ensure!(
-        incoming
-            .links
-            .iter()
-            .all(|l| belongs(l, local, peer) && l.require_ctrl),
-        "对方不能修改其他电脑的布局或关闭 Ctrl"
+        incoming.links.iter().all(|l| belongs(l, local, peer)),
+        "对方不能修改其他电脑的布局"
     );
     let previous = snapshot(config, local, peer);
     let key = |p: &PairLayout| (p.revision, p.author.clone());
@@ -213,14 +210,13 @@ mod tests {
         assert_eq!(snapshot(&reloaded, "B", "A"), reset);
     }
     #[test]
-    fn peer_cannot_edit_third_device_or_disable_ctrl_or_publish_bad_geometry() {
+    fn peer_cannot_edit_third_device_or_publish_bad_geometry() {
         let config = Config::default();
-        for bad in 0..4 {
+        for bad in 0..3 {
             let mut incoming = custom();
             match bad {
                 0 => incoming.links[0].to.device = "C".into(),
-                1 => incoming.links[0].require_ctrl = false,
-                2 => incoming.links[0].from.end = 2.,
+                1 => incoming.links[0].from.end = 2.,
                 _ => incoming.links[0].from.monitor = "missing".into(),
             }
             assert!(merge(&config, "B", "A", &incoming, topologies()).is_err());

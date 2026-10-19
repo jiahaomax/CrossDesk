@@ -208,7 +208,7 @@ mod tests {
                         topology_version: 1,
                     }
                 }
-                _ => queued = now - Duration::from_millis(101),
+                _ => queued = now - Duration::from_millis(750),
             }
             let mut queue = VecDeque::from([
                 ReceiverCommand::Input(queued, bad),

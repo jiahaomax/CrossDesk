@@ -27,3 +27,8 @@ export function errorSummary(raw: string) {
   if (/JSON|parse|解析/i.test(raw)) return { title: '无法读取后台响应', hint: '请检查两台电脑的 CrossDesk 版本。' };
   return { title: '操作未完成', hint: '查看下面的原始详情，或在设置中导出诊断。' };
 }
+
+export function switchingLabel(s: Status | null) {
+  const key=s?.config.tuning?.switch_modifier;
+  return key==='None'?'直接移向边缘':key==='Shift'?'Shift + 屏幕边缘':key==='Ctrl'?'Ctrl + 屏幕边缘':'待读取切换按键';
+}

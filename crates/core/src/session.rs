@@ -51,7 +51,7 @@ pub struct ControlSession {
     delivered_local: BTreeSet<PhysicalKey>,
     quarantined_keys: BTreeSet<PhysicalKey>,
     quarantined_buttons: BTreeSet<u8>,
-    consumed_ctrl: bool,
+    consumed_switch: bool,
     pending: Option<(Route, u64)>,
     last_switch: Option<u64>,
     pub tuning: Tuning,
@@ -77,7 +77,7 @@ impl ControlSession {
             delivered_local: BTreeSet::new(),
             quarantined_keys: BTreeSet::new(),
             quarantined_buttons: BTreeSet::new(),
-            consumed_ctrl: false,
+            consumed_switch: false,
             pending: None,
             last_switch: None,
             tuning: Tuning::default(),
@@ -90,6 +90,11 @@ impl ControlSession {
     }
     fn ctrl(&self) -> bool {
         self.physical.iter().any(|k| k.is_ctrl())
+    }
+    fn switch_held(&self) -> bool {
+        self.physical
+            .iter()
+            .any(|k| self.tuning.switch_modifier.matches(*k))
     }
     pub fn held(&self) -> bool {
         !self.physical.is_empty() || !self.buttons.is_empty()
@@ -118,10 +123,10 @@ impl ControlSession {
                     d.suppress = true;
                     return d;
                 }
-                if key.is_ctrl() && self.consumed_ctrl {
+                if self.tuning.switch_modifier.matches(*key) && self.consumed_switch {
                     d.suppress = true;
-                    if !self.ctrl() {
-                        self.consumed_ctrl = false;
+                    if !self.switch_held() {
+                        self.consumed_switch = false;
                     }
                     return d;
                 }
@@ -132,7 +137,10 @@ impl ControlSession {
                     d.suppress = true;
                     return d;
                 }
-                if self.phase == Phase::PreparingSwitch && *down && !key.is_ctrl() {
+                if self.phase == Phase::PreparingSwitch
+                    && *down
+                    && !self.tuning.switch_modifier.matches(*key)
+                {
                     self.quarantined_keys.insert(*key);
                 }
             }
@@ -186,8 +194,19 @@ impl ControlSession {
             return d;
         }
         self.position = from;
-        let allowed = self.ctrl()
-            && self.physical.iter().all(|k| k.is_ctrl())
+        let delta = if self.remote() {
+            Point {
+                x: delta.x * self.tuning.mouse_speed,
+                y: delta.y * self.tuning.mouse_speed,
+            }
+        } else {
+            delta
+        };
+        let allowed = (self.tuning.switch_modifier == SwitchModifier::None || self.switch_held())
+            && self
+                .physical
+                .iter()
+                .all(|k| self.tuning.switch_modifier.matches(*k))
             && self.buttons.is_empty()
             && self
                 .last_switch
@@ -276,7 +295,7 @@ impl ControlSession {
             });
             self.delivered_local.clear();
         }
-        self.consumed_ctrl = self.ctrl();
+        self.consumed_switch = self.switch_held();
         self.active = target.to_owned();
         self.position = route.position;
         self.phase = if self.remote() {
@@ -302,8 +321,12 @@ impl ControlSession {
     }
     pub fn recover(&mut self) -> Vec<Action> {
         if self.remote() || self.phase == Phase::PreparingSwitch {
-            self.quarantined_keys
-                .extend(self.physical.iter().copied().filter(|k| !k.is_ctrl()));
+            self.quarantined_keys.extend(
+                self.physical
+                    .iter()
+                    .copied()
+                    .filter(|k| !self.tuning.switch_modifier.matches(*k)),
+            );
             self.quarantined_buttons
                 .extend(self.buttons.iter().copied());
         }
@@ -322,7 +345,7 @@ impl ControlSession {
             buttons: vec![],
         });
         self.delivered_local.clear();
-        self.consumed_ctrl = self.ctrl();
+        self.consumed_switch = self.switch_held();
         self.active = self.source.clone();
         self.phase = Phase::Paused;
         self.epoch += 1;
@@ -334,7 +357,7 @@ impl ControlSession {
             return Err("release all physical keys and buttons before resuming".into());
         }
         self.phase = Phase::LocalActive;
-        self.consumed_ctrl = false;
+        self.consumed_switch = false;
         Ok(())
     }
 }

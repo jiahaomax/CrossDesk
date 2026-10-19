@@ -3,9 +3,9 @@ use crossdesk_core::*;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 pub const VERSION: u16 = if crossdesk_core::profile::IS_TEST {
-    0x8003
+    0x8004
 } else {
-    3
+    4
 };
 pub const MAX_FRAME: usize = 65536;
 /// Only the authenticated pair's routes are exchanged, never third-party settings.
@@ -14,6 +14,15 @@ pub struct PairLayout {
     pub revision: u64,
     pub author: DeviceId,
     pub links: Vec<EdgeLink>,
+}
+/// Preferences can be relayed only over already authenticated peer connections.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SharedSettings {
+    pub revision: u64,
+    pub author: DeviceId,
+    pub tuning: Tuning,
+    pub same_subnet_only: bool,
+    pub appearance: Appearance,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
@@ -69,6 +78,7 @@ pub enum Message {
         sequence: u64,
     },
     PairLayout(PairLayout),
+    Settings(SharedSettings),
 }
 pub async fn write_frame<W: AsyncWrite + Unpin>(w: &mut W, m: &Message) -> Result<()> {
     // Give TLS one complete frame instead of separate header and body writes.

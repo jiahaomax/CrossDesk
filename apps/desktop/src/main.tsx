@@ -15,7 +15,7 @@ import {SettingsView} from './SettingsView';
 import {HelpView} from './HelpView';
 import type {Status,Config,Edge,EdgeEnd} from './types';
 import {waitForReceipt} from './commandReceipt';
-import {receiveConfig,editConfig,isDirty,validateConfig,pairingAddressError,fieldNames,type Draft} from './configDraft';
+import {receiveConfig,editConfig,isDirty,validateConfig,pairingAddressError,type Draft} from './configDraft';
 import {version} from '../package.json';
 import './styles.css';
 function App() {
@@ -144,6 +144,15 @@ function App() {
       if (pendingCommand.current === id) { pendingCommand.current = null; setBusyCommand(null); }
     }
   };
+  useEffect(() => {
+    const appearance=status?.config.appearance;
+    if (appearance?.dark != null) setDark(appearance.dark);
+    if (appearance?.debug_info != null) setDebugInfo(appearance.debug_info);
+  }, [status?.config.appearance?.dark, status?.config.appearance?.debug_info]);
+  const saveAppearance = (key: 'dark' | 'debug_info', value: boolean) => {
+    if (demoMode || !status) { if(key==='dark')setDark(value);else setDebugInfo(value); return; }
+    void cmd('configure', {config:{...status.config,appearance:{dark:null,debug_info:null,...status.config.appearance,[key]:value}}});
+  };
   const s = demoMode ? sample : status;
   useEffect(() => {
     if (isTauri() && demoMode && status?.enabled) {
@@ -157,7 +166,6 @@ function App() {
   const save = () => {
     const problem = validateConfig(cfg);
     if (problem) { setError(problem); setDismissedError(''); return; }
-    if (draft?.conflicts.length) { setError('后台配置在编辑期间发生变化。请先放弃当前草稿并重新编辑，避免覆盖新配对或其他修改。'); setDismissedError(''); return; }
     void cmd("configure", { config: { ...cfg, sharing: status?.config.sharing ?? false } });
   };
   const displayedLinks = cfg.links;
@@ -233,7 +241,7 @@ function App() {
     <aside className="sidebar">
       <div className="brand" title="CrossDesk"><span className="brand-mark"><Waypoints size={25}/></span><span className="sr-only">CrossDesk</span></div>
       <nav className="primary-nav" aria-label="主导航">{[['layout','工作区',Monitor],['connections','连接',Network],['settings','设置',Settings],['help','帮助',HelpCircle]].map(([id,label,Icon])=><button key={String(id)} className={tab===id?'nav-item selected':'nav-item'} aria-current={tab===id?'page':undefined} onClick={()=>navigate(String(id))}>{React.createElement(Icon as typeof Monitor,{size:18})}<span>{String(label)}</span>{id==='settings'&&dirty&&!demoMode&&<span className="draft-dot" aria-label="有未保存修改"/>}</button>)}</nav>
-      <div className="sidebar-bottom"><button className="theme-toggle" aria-label={dark?"切换浅色":"切换深色"} title={dark?"切换浅色":"切换深色"} onClick={()=>setDark(!dark)}>{dark?<Sun size={17}/>:<Moon size={17}/>}<span className="sr-only">{dark?'切换浅色':'切换深色'}</span></button>{debugInfo&&<div className="version">{version}</div>}</div>
+      <div className="sidebar-bottom"><button className="theme-toggle" aria-label={dark?"切换浅色":"切换深色"} title={dark?"切换浅色":"切换深色"} disabled={!!busyCommand} onClick={()=>saveAppearance('dark',!dark)}>{dark?<Sun size={17}/>:<Moon size={17}/>}<span className="sr-only">{dark?'切换浅色':'切换深色'}</span></button>{debugInfo&&<div className="version">{version}</div>}</div>
     </aside>
     <main className="main-shell">
       <header className="app-header"><div className="header-title"><span className="app-wordmark">CrossDesk<span>/</span></span><h1>{{layout:'工作区',connections:'连接',settings:'设置',help:'帮助'}[tab]}</h1>{demoMode&&<span className="demo-badge">DEMO</span>}</div><div className="header-actions">{tab==='layout'&&<Button onClick={openConnection}><Plus size={16}/>连接电脑</Button>}<Button variant="outline" title={unavailableReason||undefined} disabled={demoMode||!status||busyCommand==='pause'||(readFailed&&!canPause)} onClick={()=>cmd(canPause?'pause':'resume')}>{busyCommand==='pause'||busyCommand==='resume'?<Loader2 size={16} className="spin"/>:canPause?<Pause size={16}/>:<Play size={16}/>} {busyCommand==='pause'?'正在暂停…':busyCommand==='resume'?'正在启用…':!s?'共享不可用':pairingBusy?'停止配对并暂停':canPause?'暂停共享':'启用共享'}</Button></div></header>
@@ -247,10 +255,10 @@ function App() {
         {debugInfo&&<div className="workspace-toolbar"><div className="workspace-local"><Monitor size={17}/><strong title={local?.device.name}>{local?.device.name??'本机设备待读取'}</strong><span className="local-tag">本机</span><span className="toolbar-count">{s?<>{s.topology.length} 台电脑 · {count} 块屏幕</>:'尚未读取设备'}</span></div></div>}
         {s?<LayoutCanvas links={cfg.links.length?cfg.links:s.effective_links??[]} onChange={links=>setConfig({...cfg,links})} editDisabled={demoMode||!status||!!busyCommand||!!settingsBlocked||!!s.topology_error} debugInfo={debugInfo} onRefresh={()=>void cmd('refresh')} refreshDisabled={demoMode||!status||!!busyCommand||readFailed} refreshing={busyCommand==='refresh'} onConnect={openConnection} status={s} stale={readFailed&&!demoMode} selected={selected} onSelect={setSelected}/>:<div className="empty-state workspace-empty">{(demoMode&&scenario==='loading')||(isTauri()&&!readFailed)?<Loader2 size={32} className="spin"/>:<Monitor size={34}/>}<h2>{demoMode&&scenario==='loading'?'正在读取显示器':isTauri()&&!readFailed?'正在读取本机设备':readFailed?'无法读取设备状态':'请在桌面程序中打开工作区'}</h2><p>{demoMode?'示例读取状态，不代表真实后台。':isTauri()?'设备与显示屏信息来自原生后台。读取完成后会自动显示。':'浏览器未连接原生后台，无法读取本机显示屏或进行键鼠共享。请运行 CrossDesk 桌面程序。'}</p></div>}
 
-        {dirty&&!demoMode&&<div className="layout-save-bar"><span role="status">{busyCommand==='configure'?'正在保存…':draft?.conflicts.length?'布局已在另一处修改，请放弃草稿后重试':'有未保存的修改'}</span><Button variant="ghost" size="sm" disabled={!!busyCommand} onClick={discardConfig}>放弃修改</Button><Button size="sm" onClick={save} disabled={!!busyCommand||!!settingsBlocked||!!draft?.conflicts.length||!!validateConfig(cfg)}>{busyCommand==='configure'?'正在保存…':'保存布局'}</Button></div>}
+        {dirty&&!demoMode&&<div className="layout-save-bar"><span role="status">{busyCommand==='configure'?'正在保存…':'有未保存的修改'}</span><Button variant="ghost" size="sm" disabled={!!busyCommand} onClick={discardConfig}>放弃修改</Button><Button size="sm" onClick={save} disabled={!!busyCommand||!!settingsBlocked||!!validateConfig(cfg)}>{busyCommand==='configure'?'正在保存…':'保存布局'}</Button></div>}
         <button className="edge-disclosure" disabled={!s} onClick={()=>setEdgeOpen(true)}><span><Waypoints size={17}/><strong>切换方向</strong><small>{liveRoute ? `${edgeNames[liveRoute.from.edge]} → ${s?.topology.find(t=>t.device.id===liveRoute.to.device)?.device.name??'对方'} · ${edgeNames[liveRoute.to.edge]}` : s ? `未设置` : '等待连接'}</small></span><ChevronRight size={17}/></button></div>
         <div hidden={tab!=='connections'}><ConnectionPanel debugInfo={debugInfo} status={s} demo={demoMode} unavailable={readFailed&&!demoMode} commandError={error} cmd={cmd} pending={busyCommand} open={connectOpen} setOpen={setConnectOpen} onWorkspace={()=>setTab('layout')}/></div>
-        <div hidden={tab!=='settings'}><SettingsView debugInfo={debugInfo} setDebugInfo={setDebugInfo} onEdges={()=>setEdgeOpen(true)} status={s} config={demoMode&&sample?sample.config:cfg} onChange={setConfig} save={save} dirty={!demoMode&&dirty} conflicts={draft?.conflicts.map(k=>fieldNames[k])??[]} discard={discardConfig} blocked={settingsBlocked} cmd={cmd} demo={demoMode} toggleDemo={toggleDemo} demoBlockedReason={demoBlockedReason} pending={busyCommand} dark={dark} setDark={setDark} platform={platform} onQuit={quitApp} addresses={<section className="panel">
+        <div hidden={tab!=='settings'}><SettingsView debugInfo={debugInfo} setDebugInfo={v=>saveAppearance('debug_info',v)} onEdges={()=>setEdgeOpen(true)} status={s} config={demoMode&&sample?sample.config:cfg} onChange={setConfig} save={save} dirty={!demoMode&&dirty}  discard={discardConfig} blocked={settingsBlocked} cmd={cmd} demo={demoMode} toggleDemo={toggleDemo} demoBlockedReason={demoBlockedReason} pending={busyCommand} dark={dark} setDark={v=>saveAppearance('dark',v)} platform={platform} onQuit={quitApp} addresses={<section className="panel">
               <h2>电脑地址</h2>
               <p>
                 对方 IP 变更时，在这里更新并保存。
@@ -320,7 +328,7 @@ function App() {
     </main>
     <Dialog title="切换方向" open={edgeOpen} onClose={()=>setEdgeOpen(false)} wide>
       {error&&<ErrorNotice raw={error}/>}
-      <div className="draft-toolbar"><span role="status">{busyCommand==='configure'?'正在保存…':dirty?'有未保存的修改':'已保存'}</span><Button variant="ghost" size="sm" disabled={!dirty||!!busyCommand} onClick={discardConfig}>放弃修改</Button><Button onClick={save} disabled={demoMode||!status||!dirty||!!busyCommand||!!settingsBlocked||!!draft?.conflicts.length||!!validateConfig(cfg)}>{busyCommand==='configure'?<Loader2 size={15} className="spin"/>:null}{busyCommand==='configure'?'正在保存…':'保存切换方向'}</Button>{draft?.conflicts.length?<p className="validation-message" role="alert">设置已在其他地方修改，请放弃草稿后重新编辑。</p>:null}</div>
+      <div className="draft-toolbar"><span role="status">{busyCommand==='configure'?'正在保存…':dirty?'有未保存的修改':'已保存'}</span><Button variant="ghost" size="sm" disabled={!dirty||!!busyCommand} onClick={discardConfig}>放弃修改</Button><Button onClick={save} disabled={demoMode||!status||!dirty||!!busyCommand||!!settingsBlocked||!!validateConfig(cfg)}>{busyCommand==='configure'?<Loader2 size={15} className="spin"/>:null}{busyCommand==='configure'?'正在保存…':'保存切换方向'}</Button></div>
       {s&&<SwitchingEditor status={s} links={cfg.links} disabled={demoMode||!status||!!busyCommand||!!settingsBlocked} onChange={links=>setConfig({...cfg,links})}/>}
       <details className="switching-advanced"><summary>高级：指定屏幕和触发范围</summary><p className="field-note">通常无需修改。0% 到 100% 表示整条边缘；左右边缘从上往下计算，上下边缘从左往右计算。这里添加的是单向规则。</p><fieldset disabled={demoMode||!status||!!busyCommand||!!settingsBlocked}>
               <div className="edge-form">

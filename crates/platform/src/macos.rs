@@ -1,4 +1,4 @@
-//! Written on Windows. No macOS build or native input acceptance result exists yet.
+//! macOS CI builds pass on arm64 and x86_64; physical native input acceptance is pending.
 //! Quartz coordinates are global desktop points; backing pixels remain a separate field.
 use crate::NativeEvent;
 use anyhow::{bail, Context, Result};

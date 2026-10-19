@@ -23,6 +23,12 @@ mod tests {
         assert!(!restored.same_subnet_only);
     }
     #[test]
+    fn old_tuning_keeps_default_speed_and_ctrl() {
+        let tuning: Tuning = serde_json::from_str(r#"{"mouse_hz":250}"#).unwrap();
+        assert_eq!(tuning.mouse_speed, 1.);
+        assert_eq!(tuning.switch_modifier, SwitchModifier::Ctrl);
+    }
+    #[test]
     fn listening_port_reserves_the_next_port_for_pairing() {
         for port in [0, 1023, 65535] {
             assert!(Config {
@@ -56,6 +62,10 @@ pub struct Config {
     pub layout_revisions: std::collections::BTreeMap<String, PairLayout>,
     #[serde(default)]
     pub tuning: Tuning,
+    #[serde(default)]
+    pub appearance: Appearance,
+    #[serde(default)]
+    pub shared_settings: Option<crossdesk_transport::SharedSettings>,
 }
 fn default_same_subnet() -> bool {
     true
@@ -71,6 +81,8 @@ impl Default for Config {
             links: vec![],
             layout_revisions: Default::default(),
             tuning: Tuning::default(),
+            appearance: Appearance::default(),
+            shared_settings: None,
         }
     }
 }

@@ -129,8 +129,8 @@ impl Layout {
             }
         }
         for (i, l) in self.links.iter().enumerate().filter(|(_, l)| l.enabled) {
-            if l.from.device == l.to.device || !l.require_ctrl {
-                return Err("cross-device links must require physical Ctrl".into());
+            if l.from.device == l.to.device {
+                return Err("cross-device links must connect different computers".into());
             }
             for e in [&l.from, &l.to] {
                 if !e.start.is_finite()
@@ -203,8 +203,14 @@ impl Layout {
             })
     }
     /// Segment intersection handles fast motion, and uses native desktop coordinates.
-    pub fn route(&self, device: &str, from: Point, delta: Point, ctrl: bool) -> Option<Route> {
-        if !ctrl
+    pub fn route(
+        &self,
+        device: &str,
+        from: Point,
+        delta: Point,
+        switching_allowed: bool,
+    ) -> Option<Route> {
+        if !switching_allowed
             || ![from.x, from.y, delta.x, delta.y]
                 .iter()
                 .all(|v| v.is_finite())

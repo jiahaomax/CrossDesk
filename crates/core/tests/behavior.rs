@@ -364,11 +364,11 @@ fn receiver_rejects_replay_wrong_epoch_stale_and_topology() {
         },
     };
     assert!(r.validate(&p, 1, 0, 3).is_err());
-    assert!(r.validate(&p, 1, 101, 4).is_err());
+    assert!(r.validate(&p, 1, 750, 4).is_err());
     p.epoch = 1;
     assert!(r.validate(&p, 1, 0, 4).is_err());
     p.epoch = 2;
-    assert!(r.validate(&p, 1, 0, 4).is_ok());
+    assert!(r.validate(&p, 150, 150, 4).is_ok());
     assert!(r.validate(&p, 1, 0, 4).is_err());
     assert!(r.expired(751));
 }
@@ -619,4 +619,94 @@ fn unmatched_remote_release_is_rejected() {
         },
     };
     assert!(r.validate(&p, 1, 0, 1).is_err());
+}
+
+#[test]
+fn shift_and_no_modifier_switching_consume_only_the_configured_key() {
+    for modifier in [SwitchModifier::Shift, SwitchModifier::None] {
+        let mut s = ControlSession::new("A".into(), layout()).unwrap();
+        s.tuning.switch_modifier = modifier;
+        let shift = PhysicalKey(0xe1);
+        if modifier == SwitchModifier::Shift {
+            key(&mut s, PhysicalKey::LEFT_CTRL, true);
+            assert!(s
+                .motion(Point { x: 999., y: 50. }, Point { x: 2., y: 0. }, 0)
+                .actions
+                .is_empty());
+            key(&mut s, PhysicalKey::LEFT_CTRL, false);
+            key(&mut s, shift, true);
+        }
+        switch(&mut s, "B", 1);
+        assert_eq!(s.active, "B");
+        if modifier == SwitchModifier::Shift {
+            assert!(key(&mut s, shift, false).actions.is_empty());
+            assert_eq!(key(&mut s, shift, true).actions.len(), 1);
+            key(&mut s, shift, false);
+        }
+        // Ctrl remains an ordinary remote shortcut when it is not the switching key.
+        assert_eq!(key(&mut s, PhysicalKey::LEFT_CTRL, true).actions.len(), 1);
+        key(&mut s, PhysicalKey::LEFT_ALT, true);
+        key(&mut s, PhysicalKey::ESC, true);
+        assert_eq!(s.phase, Phase::Paused);
+    }
+}
+#[test]
+fn no_modifier_still_requires_motion_and_does_not_cross_during_drag_or_typing() {
+    let mut s = ControlSession::new("A".into(), layout()).unwrap();
+    s.tuning.switch_modifier = SwitchModifier::None;
+    let edge = Point { x: 999., y: 50. };
+    assert!(s.motion(edge, Point::default(), 0).actions.is_empty());
+    key(&mut s, PhysicalKey(4), true);
+    assert!(s
+        .motion(edge, Point { x: 10., y: 0. }, 0)
+        .actions
+        .is_empty());
+    key(&mut s, PhysicalKey(4), false);
+    s.input(InputEvent::Button {
+        button: 1,
+        down: true,
+    });
+    assert!(s
+        .motion(edge, Point { x: 10., y: 0. }, 0)
+        .actions
+        .is_empty());
+    s.input(InputEvent::Button {
+        button: 1,
+        down: false,
+    });
+    switch(&mut s, "B", 0);
+    switch(&mut s, "C", 200);
+    switch(&mut s, "A", 400);
+    assert_eq!(s.phase, Phase::LocalActive);
+}
+#[test]
+fn remote_speed_multiplies_delta_without_changing_local_cursor_or_dropping_fractions() {
+    for speed in [0.25, 1., 2., 4.] {
+        let mut s = ControlSession::new("A".into(), layout()).unwrap();
+        s.tuning.mouse_speed = speed;
+        let center = Point { x: 500., y: 500. };
+        assert!(s
+            .motion(center, Point { x: 10., y: 10. }, 0)
+            .actions
+            .is_empty());
+        assert_eq!(s.position, center);
+        s.tuning.switch_modifier = SwitchModifier::None;
+        switch(&mut s, "B", 0);
+        s.motion(center, Point { x: 0.5, y: -0.5 }, 200);
+        assert_eq!(
+            s.position,
+            Point {
+                x: 500. + 0.5 * speed,
+                y: 500. - 0.5 * speed
+            }
+        );
+    }
+    for invalid in [f64::NAN, f64::INFINITY, 0., 4.1] {
+        assert!(Tuning {
+            mouse_speed: invalid,
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+    }
 }

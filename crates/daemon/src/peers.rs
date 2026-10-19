@@ -39,6 +39,7 @@ struct Peer {
     preferred: bool,
     topology: DeviceTopology,
     pair_layout: PairLayout,
+    settings: SharedSettings,
     tx: mpsc::Sender<(Instant, Message)>,
     last_seen: Instant,
     pings: Pings,
@@ -130,7 +131,7 @@ async fn establish<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     };
     ensure!(
         version == VERSION && source == peer.id && topology.device.id == peer.id,
-        "对方版本或身份不匹配，请将两端都更新到相同候选版本（rc11 或更新）"
+        "对方版本或身份不匹配，请将两端都更新到相同候选版本（rc13 或更新）"
     );
     topology.device.online = true;
     topology.device.authorized = true;
@@ -148,6 +149,15 @@ async fn establish<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     else {
         bail!("未收到配对布局");
     };
+    let settings = crate::settings_sync::snapshot(&status.lock().unwrap().config);
+    send(&mut stream, &Message::Settings(settings)).await?;
+    let Message::Settings(settings) = timeout(Duration::from_secs(5), read_frame(&mut stream))
+        .await
+        .context("同步设置超时")??
+    else {
+        bail!("未收到共享设置");
+    };
+    let lease_ms = status.lock().unwrap().config.tuning.lease_ms;
     let generation = rand::random::<u64>();
     let (mut reader, mut writer) = tokio::io::split(stream);
     let (out, mut messages) = mpsc::channel::<(Instant, Message)>(512);
@@ -177,9 +187,9 @@ async fn establish<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     let writer_task = tokio::spawn(async move {
         while let Some((queued, message)) = messages.recv().await {
             let result = if matches!(message, Message::Input(_))
-                && queued.elapsed() > Duration::from_millis(100)
+                && queued.elapsed() >= Duration::from_millis(lease_ms)
             {
-                Err(anyhow::anyhow!("输入已过期，已丢弃并释放控制"))
+                Err(anyhow::anyhow!("发送停顿超过控制期限，已释放控制"))
             } else {
                 send(&mut writer, &message).await
             };
@@ -204,6 +214,7 @@ async fn establish<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
             preferred: outbound == (id.id < peer.id),
             topology,
             pair_layout,
+            settings,
             tx: out,
             last_seen: Instant::now(),
             pings: Pings::default(),
@@ -281,14 +292,18 @@ struct Manager {
     started: Instant,
     renewal: u64,
     retry_after: Instant,
+    restart_requested: bool,
 }
 impl Manager {
     fn send(&self, id: &str, m: Message) -> Result<()> {
+        self.send_at(id, Instant::now(), m)
+    }
+    fn send_at(&self, id: &str, queued: Instant, m: Message) -> Result<()> {
         self.peers
             .get(id)
             .context("对方已断开")?
             .tx
-            .try_send((Instant::now(), m))
+            .try_send((queued, m))
             .map_err(|_| anyhow::anyhow!("发送队列已满，已安全释放控制"))
     }
     fn now(&self) -> u64 {
@@ -369,7 +384,8 @@ impl Manager {
                 "正在接受远端控制 · 操作本机键鼠可收回控制".into()
             } else if self.active != self.id {
                 format!(
-                    "正在控制对方 · Ctrl + 边缘返回 · Ctrl + Alt + {} 紧急释放",
+                    "正在控制对方 · {}返回 · Ctrl + Alt + {} 紧急释放",
+                    self.config.tuning.switch_modifier.label(),
                     if self.config.tuning.emergency_key == PhysicalKey(0x45) {
                         "F12"
                     } else {
@@ -377,7 +393,10 @@ impl Manager {
                     }
                 )
             } else {
-                "双向共享已就绪 · 按住 Ctrl 移向跨机边缘".into()
+                format!(
+                    "双向共享已就绪 · {}",
+                    self.config.tuning.switch_modifier.label()
+                )
             };
         });
     }
@@ -496,14 +515,29 @@ impl Manager {
     }
     async fn message(&mut self, id: &str, queued: Instant, m: Message) -> Result<()> {
         // Network presence is not input. Only input/control events have the short age bound.
-        if matches!(
-            m,
-            Message::Input(_) | Message::Activate { .. } | Message::Prepare { .. }
-        ) && queued.elapsed() > Duration::from_millis(100)
+        if matches!(m, Message::Input(_))
+            && queued.elapsed() >= Duration::from_millis(self.config.tuning.lease_ms)
         {
             bail!("过期输入或切换请求已丢弃");
         }
         match m {
+            Message::Settings(incoming) => {
+                if let Some(next) = crate::settings_sync::merge(&self.config, &incoming)? {
+                    if next.tuning != self.config.tuning
+                        || next.same_subnet_only != self.config.same_subnet_only
+                    {
+                        self.cancel()?;
+                    }
+                    self.restart_requested = next.same_subnet_only != self.config.same_subnet_only;
+                    next.save()?;
+                    self.config = next.clone();
+                    update(&self.status, |s| s.config = next);
+                    for peer in self.peers.keys().filter(|peer| peer.as_str() != id) {
+                        self.send(peer, Message::Settings(incoming.clone()))?;
+                    }
+                    self.publish();
+                }
+            }
             Message::Claim(c) => {
                 ensure!(c.origin.len() <= 128, "无效控制请求");
                 if !self.config.sharing
@@ -720,11 +754,13 @@ impl Manager {
         Ok(())
     }
     fn actions(&mut self, queued: Instant, batch: Vec<Action>) -> Result<()> {
-        ensure!(
-            queued.elapsed() < Duration::from_millis(100),
-            "输入排队超过 100 ms，已安全暂停"
-        );
-        for action in batch {
+        let actions = crate::outbound_delivery::prepare_actions(
+            (queued, batch),
+            || self.actions.try_recv().ok(),
+            Instant::now(),
+            self.config.tuning.lease_ms,
+        )?;
+        for (queued, action) in actions {
             match action {
                 Action::Prepare {
                     target,
@@ -785,8 +821,9 @@ impl Manager {
                 Action::Deliver { target, event } if target != self.id => {
                     self.sequence += 1;
                     let session = self.ownership.claim().context("控制权已失效")?.nonce;
-                    self.send(
+                    self.send_at(
                         &target,
+                        queued,
                         Message::Input(InputPacket {
                             source: self.id.clone(),
                             session,
@@ -944,13 +981,14 @@ pub async fn run(
         started: Instant::now(),
         renewal: 0,
         retry_after: Instant::now(),
+        restart_requested: false,
     };
     manager.publish();
     let mut tick = tokio::time::interval(Duration::from_millis(50));
     let mut pulse = Instant::now();
     let result:Result<()>=async {loop {tokio::select! {
         _=tick.tick()=>{
-            if stop.load(Ordering::Acquire){break;}
+            if stop.load(Ordering::Acquire)||manager.restart_requested{break;}
             if let Some(n)=&manager.source {ensure!(!n.fault.load(Ordering::Acquire),"输入安全保护已触发。已暂停共享，请松开按键后恢复。");n.alive.store(n.started.elapsed().as_millis() as u64,Ordering::Release);}
             if manager.receiver.as_ref().is_some_and(|n|n.interrupted.load(Ordering::Acquire)){manager.cancel()?;}
             let effects=manager.ownership.expire(manager.now());manager.effects(effects)?;
@@ -978,10 +1016,16 @@ pub async fn run(
                     if let Some(next)=crate::layout_sync::merge(&s.config,&manager.id,&id,&peer.pair_layout,topologies)? {
                         next.save()?;s.config=next.clone();manager.config=next;
                     }
+                    if let Some(next)=crate::settings_sync::merge(&s.config,&peer.settings)? {
+                        next.save()?;s.config=next.clone();manager.config=next;
+                    }
                     Ok(())
                 })();
                 if let Err(e)=reconciled {update(&status,|s|{s.connection_issues.insert(id,format!("布局未同步：{e:#}"));});continue;}
-                update(&status,|s|{s.connection_issues.remove(&id);});manager.peers.insert(id,peer);manager.publish();
+                update(&status,|s|{s.connection_issues.remove(&id);});manager.peers.insert(id,peer);
+                let settings=crate::settings_sync::snapshot(&manager.config);
+                for id in manager.peers.keys() {manager.send(id,Message::Settings(settings.clone()))?;}
+                manager.publish();
             },
             Event::Message(id,generation,queued,result)=>{
                 if !manager.peers.get(&id).is_some_and(|p|p.generation==generation){continue;}

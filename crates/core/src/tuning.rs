@@ -1,8 +1,40 @@
 use crate::*;
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SwitchModifier {
+    #[default]
+    Ctrl,
+    Shift,
+    None,
+}
+impl SwitchModifier {
+    pub fn matches(self, key: PhysicalKey) -> bool {
+        match self {
+            Self::Ctrl => key.is_ctrl(),
+            Self::Shift => key.0 == 0xe1 || key.0 == 0xe5,
+            Self::None => false,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ctrl => "Ctrl + 边缘",
+            Self::Shift => "Shift + 边缘",
+            Self::None => "直接移向边缘",
+        }
+    }
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Appearance {
+    pub dark: Option<bool>,
+    pub debug_info: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Tuning {
     pub mouse_hz: u32,
+    pub mouse_speed: f64,
+    pub switch_modifier: SwitchModifier,
     pub motion_wait_ms: u64,
     pub edge_wait_ms: u64,
     pub heartbeat_ms: u64,
@@ -13,6 +45,8 @@ impl Default for Tuning {
     fn default() -> Self {
         Self {
             mouse_hz: 250,
+            mouse_speed: 1.,
+            switch_modifier: SwitchModifier::Ctrl,
             motion_wait_ms: 0,
             edge_wait_ms: 0,
             heartbeat_ms: 100,
@@ -23,7 +57,9 @@ impl Default for Tuning {
 }
 impl Tuning {
     pub fn validate(&self) -> Result<(), String> {
-        if ![125, 250, 500].contains(&self.mouse_hz)
+        if !self.mouse_speed.is_finite()
+            || !(0.25..=4.).contains(&self.mouse_speed)
+            || ![125, 250, 500].contains(&self.mouse_hz)
             || self.motion_wait_ms > 20
             || self.edge_wait_ms > 300
             || !(50..=200).contains(&self.heartbeat_ms)

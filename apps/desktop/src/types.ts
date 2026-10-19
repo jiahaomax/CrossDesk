@@ -45,8 +45,11 @@ export type Config = {
   port: number;
   endpoints: { peer: string; address: string }[];
   links: EdgeLink[];
+  appearance?: {dark: boolean | null; debug_info: boolean | null};
   tuning?: {
     mouse_hz: number;
+    mouse_speed: number;
+    switch_modifier: 'Ctrl' | 'Shift' | 'None';
     motion_wait_ms: number;
     edge_wait_ms: number;
     heartbeat_ms: number;
