@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const packagePattern = /^CrossDesk-Test-(\d+)\.(\d+)\.(\d+)-rc(\d+)-(Windows-x64|Mac-arm64|Mac-x86_64)(\.zip)?$/;
 const windowsFiles = new Set(['crossdesk-test-desktop.exe', 'crossdesk-test-daemon.exe',
   'Cleanup-CrossDesk-Test.cmd', 'VERSION.txt', '使用说明.md']);
-const macFiles = new Set(['CrossDesk Test.app', 'Cleanup-CrossDesk-Test.command', 'VERSION.txt', '使用说明.md']);
+const macFiles = new Set(['CrossDesk Test.app', 'Cleanup-CrossDesk-Test.command', 'VERSION.txt', 'SIGNING.json', '使用说明.md']);
 
 function assertNoLinks(target) {
   let cursor = path.resolve(target);

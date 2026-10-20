@@ -45,6 +45,7 @@ try {
     const macFolder = zip(9, 'Mac-arm64').slice(0, -4);
     fs.mkdirSync(path.join(macFolder, 'CrossDesk Test.app'), { recursive: true });
     fs.writeFileSync(path.join(macFolder, 'VERSION.txt'), 'CrossDesk Test 0.3.0');
+    fs.writeFileSync(path.join(macFolder, 'SIGNING.json'), '{"certificate_sha256":"fixture"}');
     const mac = cleanTestPackages(zip(14, 'Mac-arm64'), options);
     assert.equal(mac.removed.length, 2);
     assert.ok(fs.existsSync(zip(14, 'Mac-arm64')));
