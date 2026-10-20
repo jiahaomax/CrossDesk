@@ -4,7 +4,7 @@
 
 已交付的 rc22 / rc23 都是 ad-hoc 签名。用户 rc22 重置后的最新诊断为 Accessibility=false、ListenEvent=true、PostEvent=true，已经有读取和控制输入的能力；**这组状态无需再次重置权限**。rc22 的三项 AND 错误由 rc23 修正。
 
-固定测试签名流程已写入源码。2026-10-21 用户明确批准生成长期测试签名身份、保存在本机并配置到 `jiahaomax/CrossDesk` 的 GitHub Actions Secrets。专用身份已生成并配置，rc24 正在准备构建，尚未交付；当前可运行的最新包仍是 rc23。原生检查用的临时证书没有用于发布。
+固定测试签名流程已写入源码。2026-10-21 用户明确批准生成长期测试签名身份、保存在本机并配置到 `jiahaomax/CrossDesk` 的 GitHub Actions Secrets。专用身份已生成并配置，rc24 ARM64 / Intel 已构建、下载、校验并交付。原生检查用的临时证书没有用于发布。
 
 固定公有证书 SHA-256：`6e91b75f42656063e8f1def6fb2e22b867d630225646fb3fc5ffc1560f8db325`。RSA 3072 / SHA-256，专用于 code signing，有效期至 2036-10-17。此指纹可公开；私钥和密码不得提交。构建脚本会在到期前 30 天停止打包，需要提前处理迁移，不能静默换证书。
 
@@ -60,10 +60,27 @@
 | `python3 scripts/check-macos-signing-native.py` | Mac ARM64 / Intel 各 5 组通过；不同版本身份、无构建钥匙串运行、错误密钥、篡改、错误指纹 |
 | 原生 CI 第 1 / 2 次 | 在不必要的证书信任添加/移除阶段等待交互超时；最终方案完全取消这些操作，无 sudo 或根信任安装 |
 | 原生 CI 第 3 / 4 次 | 检查工具的 codesign 参数格式错误；分别修正可选导出路径和内联 requirement 的 `=` 格式 |
-| Windows 新包 / Rust 输入回归 / 浏览器截图 | 未执行，未改对应实现 |
+| `python3 scripts/macos-test-signing.py build` | rc24 两种架构均通过；下文记录最终结果 |
+| Windows 新包 / Windows Rust 或 Clippy / 浏览器截图 | 未执行，未改对应实现 |
 | 用户 Mac 的 TCC 升级保留、系统首次打开、实际输入 | 未执行，不以 CI 代替 |
 
 最终原生 CI：[39453390722](https://github.com/jiahaomax/CrossDesk/actions/runs/39453390722)，提交 `bda8f11f1a24b7a3d89b8f5837cb8af998d687f4`；ARM64 / Intel 均成功。报告 ZIP 的 GitHub digest 与本地 SHA-256、ZIP CRC 和 5 项结果核对通过；只含公有签名要求和测试结论，不含证书私钥。独立源码分支 `codex/macos-signing-stability`，根工作区和主分支没有提交或覆盖。
+
+## rc24 成品记录
+
+打包分支 `codex/macos-test-rc24`，提交 `9aa8972099e8cf88719273cc886dd220b727a0e4`，构建 [39454496686](https://github.com/jiahaomax/CrossDesk/actions/runs/39454496686)。固定签名材料只经用户批准配置到 Secrets，未提交到该分支。
+
+ARM64 / Intel 均已构建、下载并校验。CI 分别执行原有 `cargo test --workspace --exclude crossdesk-desktop --locked --features crossdesk-daemon/test-profile`，每架构 115 通过、1 忽略；后台与 GUI release、TypeScript/Vite、原生 `codesign --verify --deep --strict`、实际测试版 Keychain 创建/删除与正式版哨兵保留通过。两个最终应用和后台的签名要求完全相同且都绑定已保存的证书。
+
+Windows 上用 `output/mac-signing-stability-2026-10-20/import-mac.py <外层 ZIP> <架构> <GitHub digest> <CI URL>` 核对外层 SHA-256、两层 ZIP CRC、bundle ID、架构、0755 执行位、两个 Mach-O 的真实 CMS 证书和固定代码标识、非 ad-hoc 标志及独立身份要求。原始内层 ZIP 未重新压缩。cryptography 对 Apple 的 CMS 编码发出 DER → BER 解析回退警告，成功提取并匹配证书；这是 Windows 结构检查，密码学签名验证由原生 CI 完成。未出现私钥/P12/密码文件。
+
+- ARM64 ZIP：5,389,972 字节；SHA-256 `b16db28a00bae334ed813dbb1ab1f55d5ab1be195f3647c7556984778c7dc34d`；证据 `mac-arm64.json`、`arm64-ci-checks.txt`。
+- Intel ZIP：5,730,825 字节；SHA-256 `50ea3eb93f499a0af39ac8c51196b21f9172b771378b164a94f88ae8ce2cdd1c`；证据 `mac-x86_64.json`、`x86_64-ci-checks.txt`。
+- 原有 Windows rc22 ZIP 的当前 SHA-256 与原交付 `0122a992101a190813871e3b577cd4808fec84c152e91573bbcbfb9f46552775` 一致，CRC 通过；这不是一次新的 Windows 构建或输入验收。
+- 验证后使用原 `scripts/clean-test-packages.mjs`，已删除 dist 中的旧 rc23 两种 Mac ZIP，以及 Windows rc12–rc21 的 10 个目录和 10 个 ZIP。没有运行中的包被终止；正式版、源代码及配置保留。日志 `cleanup-arm64.json`、`cleanup-x86_64.json`、`cleanup-windows.json`。
+- 已验证并导入的本轮 Downloads 外层重复文件 `CrossDesk-Test-ARM64 (11).zip`、`CrossDesk-Test-X64 (8).zip` 及两个签名报告下载 ZIP 已用 PowerShell 精确路径删除；旧的非本轮 Downloads 文件未扫描删除。
+
+最终使用：Windows 运行现有 `dist/CrossDesk-Test-0.3.0-rc22-Windows-x64/crossdesk-test-desktop.exe`。Mac 根据芯片解压 `dist/CrossDesk-Test-0.3.0-rc24-Mac-arm64.zip` 或 `...-x86_64.zip`，在旧版设置中退出后运行新包的 `CrossDesk Test.app`。无需编译或卸载。首次 ad-hoc → 固定证书迁移、已有钥匙串读取与 TCC 升级保留、用户实体双机输入仍未实机验收；不将这次 CI 通过表述为全部权限问题已获用户验证。
 
 ## 依据
 
