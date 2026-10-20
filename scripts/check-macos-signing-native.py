@@ -69,24 +69,24 @@ with tempfile.TemporaryDirectory(prefix="crossdesk-signing-proof-") as directory
         assert (a / "Contents/MacOS/fixture").read_bytes() != (b / "Contents/MacOS/fixture").read_bytes()
         assert old["requirements"] == new["requirements"]
         for identifier, path in ((signing.BUNDLE_ID, b), (signing.HELPER_ID, b / "Contents/MacOS/crossdesk-test-daemon")):
-            run("/usr/bin/codesign", "--verify", "--strict", "-R", old["requirements"][identifier], path)
-        run("/usr/bin/codesign", "--verify", "--deep", "--strict", "-R",
-            new["requirements"][signing.BUNDLE_ID], a)
+            run("/usr/bin/codesign", "--verify", "--strict", "-R=" + old["requirements"][identifier], path)
+        run("/usr/bin/codesign", "--verify", "--deep", "--strict",
+            "-R=" + new["requirements"][signing.BUNDLE_ID], a)
         report["checks"].append("Different app/helper builds satisfy the same certificate-bound designated requirements")
     # Verify without the signer's private key/keychain or explicit runner trust.
-    run("/usr/bin/codesign", "--verify", "--deep", "--strict", "-R",
-        old["requirements"][signing.BUNDLE_ID], b)
+    run("/usr/bin/codesign", "--verify", "--deep", "--strict",
+        "-R=" + old["requirements"][signing.BUNDLE_ID], b)
     assert run(b / "Contents/MacOS/fixture").stdout.strip() == b"2"
     assert run(b / "Contents/MacOS/crossdesk-test-daemon").stdout.strip() == b"2"
     report["checks"].append("Verification and fixture execution succeed without build keychain or explicit certificate trust")
     print("Checking impostor certificate and tampered content", flush=True)
     with signing.signing_keychain(*other) as env:
         signing.sign_app(impostor, env)
-    result = run("/usr/bin/codesign", "--verify", "--strict", "-R",
-                 old["requirements"][signing.BUNDLE_ID], impostor, check=False)
+    result = run("/usr/bin/codesign", "--verify", "--strict",
+                 "-R=" + old["requirements"][signing.BUNDLE_ID], impostor, check=False)
     assert result.returncode != 0
-    result = run("/usr/bin/codesign", "--verify", "--strict", "-R",
-                 old["requirements"][signing.HELPER_ID],
+    result = run("/usr/bin/codesign", "--verify", "--strict",
+                 "-R=" + old["requirements"][signing.HELPER_ID],
                  impostor / "Contents/MacOS/crossdesk-test-daemon", check=False)
     assert result.returncode != 0
     report["checks"].append("Same bundle identifiers and certificate name with a different private key are rejected")
