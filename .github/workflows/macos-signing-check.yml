@@ -1,0 +1,23 @@
+name: Mac test signing identity checks
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/macos-signing-*']
+permissions:
+  contents: read
+jobs:
+  signing:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check-macos-signing-native.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signing-check-${{ runner.arch }}
+          path: output/mac-signing-stability-native.json
+          if-no-files-found: error

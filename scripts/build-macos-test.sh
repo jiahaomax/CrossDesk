@@ -2,6 +2,9 @@
 set -eu
 cd "$(dirname "$0")/.."
 test "$(uname -s)" = Darwin || { echo 'macOS build host required'; exit 1; }
+: "${CROSSDESK_TEST_SIGNING_KEYCHAIN:?Run through macos-test-signing.py build with the fixed test certificate}"
+: "${CROSSDESK_TEST_SIGNING_IDENTITY:?Fixed test signing identity required}"
+: "${CROSSDESK_TEST_CERT_SHA256:?Pinned test certificate required}"
 root="$PWD"
 arch=$(uname -m)
 case "$arch" in arm64|x86_64) ;; *) echo 'Unsupported architecture'; exit 1;; esac
@@ -25,6 +28,8 @@ test -d "$app"
 test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$app/Contents/Info.plist")" = dev.crossdesk.desktop.test
 "$app/Contents/MacOS/crossdesk-test-daemon" --profile-info | python3 -c 'import json,sys; assert json.load(sys.stdin)["test"]'
 /usr/bin/codesign --verify --deep --strict "$app"
+signing_report="$CARGO_TARGET_DIR/test-signing.json"
+python3 scripts/macos-test-signing.py sign "$app" "$signing_report"
 if [ "${GITHUB_ACTIONS:-}" = true ]; then
   python3 scripts/check-macos-test-edition.py "$app/Contents/MacOS/crossdesk-test-daemon"
 fi
@@ -33,7 +38,8 @@ ditto "$app" "$out/CrossDesk Test.app"
 cp scripts/Cleanup-CrossDesk-Test.command "$out/"
 chmod +x "$out/Cleanup-CrossDesk-Test.command"
 cp docs/TEST_EDITION.md "$out/使用说明.md"
-printf 'CrossDesk Test 0.3.0 rc23\nmacOS %s\nAd-hoc signed; not notarized; native input acceptance pending\n' "$arch" > "$out/VERSION.txt"
+cp "$signing_report" "$out/SIGNING.json"
+printf 'CrossDesk Test 0.3.0 rc23\nmacOS %s\nFixed test certificate; not notarized; native permission upgrade and input acceptance pending\n' "$arch" > "$out/VERSION.txt"
 ditto -c -k --sequesterRsrc --keepParent "$out" "$out.zip"
 node scripts/clean-test-packages.mjs "$out.zip" || echo 'New package is ready, but previous test packages could not be cleaned.' >&2
 echo "Ready: $out.zip"

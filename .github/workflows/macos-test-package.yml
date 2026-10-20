@@ -22,7 +22,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: sh scripts/build-macos-test.sh
+      - run: python3 scripts/macos-test-signing.py build
+        env:
+          CROSSDESK_TEST_CERT_P12: ${{ secrets.CROSSDESK_TEST_CERT_P12 }}
+          CROSSDESK_TEST_CERT_PASSWORD: ${{ secrets.CROSSDESK_TEST_CERT_PASSWORD }}
+          CROSSDESK_TEST_CERT_SHA256: ${{ vars.CROSSDESK_TEST_CERT_SHA256 }}
       - uses: actions/upload-artifact@v4
         with:
           name: CrossDesk-Test-${{ runner.arch }}
