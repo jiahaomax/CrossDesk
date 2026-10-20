@@ -50,11 +50,11 @@ collect() {
         read_command /bin/ps -ww -p "$pid" -o pid=,ppid=,etime=,comm=
         case "$app" in */AppTranslocation/*) printf 'app_translocated=true\n';; *) printf 'app_translocated=false\n';; esac
         section 'App signature and designated requirement'
-        read_command /usr/bin/codesign --display --verbose=4 --requirements :- "$app"
+        read_command /usr/bin/codesign --display --verbose=4 --requirements - "$app"
         section 'App signature verification'
         read_command /usr/bin/codesign --verify --deep --strict --verbose=2 "$app"
         section 'Helper signature and designated requirement'
-        read_command /usr/bin/codesign --display --verbose=4 --requirements :- "$app/Contents/MacOS/crossdesk-test-daemon"
+        read_command /usr/bin/codesign --display --verbose=4 --requirements - "$app/Contents/MacOS/crossdesk-test-daemon"
         section 'Helper process in this app'
         printf '%s\n' "$processes" | /usr/bin/awk -v target="$app/Contents/MacOS/crossdesk-test-daemon" '
           { p=$1; parent=$2; sub(/^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]+/, "");
