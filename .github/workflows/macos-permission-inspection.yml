@@ -1,0 +1,19 @@
+name: Mac permission inspector checks
+on:
+  push:
+    branches: ['codex/macos-permission-inspection']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check-mac-permission-inspector.py /bin/bash
+      - run: python3 scripts/check-mac-permission-inspector-native.py

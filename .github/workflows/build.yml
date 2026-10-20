@@ -1,0 +1,44 @@
+name: Build and safe tests
+on:
+  push:
+    branches-ignore: ['codex/macos-permission-inspection']
+  pull_request:
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --prefix apps/desktop
+      - run: powershell -File scripts/test-windows.ps1
+      - run: powershell -File scripts/build-windows.ps1
+      - run: node scripts/smoke-daemon.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CrossDesk-Windows-debug
+          path: |
+            target/debug/crossdesk-desktop.exe
+            target/debug/crossdesk-daemon.exe
+  macos-compile-unverified:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: cargo test -p crossdesk-core --locked
+      - run: cargo build -p crossdesk-daemon --locked
+      - run: |
+          mkdir -p apps/desktop/src-tauri/binaries
+          triple=$(rustc -vV | sed -n 's/^host: //p')
+          cp target/debug/crossdesk-daemon "apps/desktop/src-tauri/binaries/crossdesk-daemon-$triple"
+          npm ci --prefix apps/desktop
+          npm run build --prefix apps/desktop
+          cargo build -p crossdesk-desktop --features custom-protocol --locked
+      # Compilation is NOT macOS permission/capture/suppression/injection acceptance.
