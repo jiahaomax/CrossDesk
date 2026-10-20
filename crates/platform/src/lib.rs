@@ -7,20 +7,29 @@ pub struct InputPermissions {
     pub post_event: bool,
 }
 impl InputPermissions {
+    // Accessibility subsumes Quartz event listening and posting. The three
+    // preflights describe overlapping grants, not three required switches.
+    // https://developer.apple.com/forums/thread/828052
+    pub fn can_listen(&self) -> bool {
+        self.accessibility || self.input_monitoring
+    }
+    pub fn can_post(&self) -> bool {
+        self.accessibility || self.post_event
+    }
     pub fn ready(&self) -> bool {
-        self.accessibility && self.input_monitoring && self.post_event
+        self.can_listen() && self.can_post()
     }
     pub fn check(&self) -> anyhow::Result<()> {
         let mut missing = vec![];
-        if !self.accessibility || !self.post_event {
+        if !self.can_post() {
             missing.push("辅助功能");
         }
-        if !self.input_monitoring {
+        if !self.can_listen() {
             missing.push("输入监控");
         }
         anyhow::ensure!(
             missing.is_empty(),
-            "请先开启 Mac 的{}权限，再启用共享",
+            "当前键鼠后台尚未取得{}权限",
             missing.join("和")
         );
         Ok(())
@@ -45,30 +54,42 @@ pub fn ensure_input_permissions() -> anyhow::Result<()> {
 mod permission_tests {
     use super::*;
     #[test]
-    fn all_native_checks_are_required_and_the_missing_permission_is_named() {
-        for (accessibility, input_monitoring, post_event) in [
-            (false, false, false),
-            (true, false, true),
-            (false, true, false),
-            (true, true, false),
-        ] {
-            let checks = InputPermissions {
-                accessibility,
-                input_monitoring,
-                post_event,
-            };
-            assert!(!checks.ready());
-            let error = checks.check().unwrap_err().to_string();
-            assert_eq!(error.contains("输入监控"), !input_monitoring);
-            assert_eq!(error.contains("辅助功能"), !accessibility || !post_event);
-        }
-        let granted = InputPermissions {
-            accessibility: true,
+    fn quartz_listen_and_post_grants_are_ready_without_ax_trust() {
+        // rc22 on the user's Mac after repairing stale TCC records.
+        let permissions = InputPermissions {
+            accessibility: false,
             input_monitoring: true,
             post_event: true,
         };
-        assert!(granted.ready());
-        assert!(granted.check().is_ok());
+        assert!(permissions.can_listen());
+        assert!(permissions.can_post());
+        assert!(permissions.ready());
+        assert!(permissions.check().is_ok());
+    }
+    #[test]
+    fn accessibility_covers_listening_and_posting_without_separate_grants() {
+        for accessibility in [true, false] {
+            for input_monitoring in [false, true] {
+                for post_event in [false, true] {
+                    let checks = InputPermissions {
+                        accessibility,
+                        input_monitoring,
+                        post_event,
+                    };
+                    let ready = accessibility || (input_monitoring && post_event);
+                    assert_eq!(checks.ready(), ready, "{checks:?}");
+                    assert_eq!(checks.check().is_ok(), ready, "{checks:?}");
+                    if let Err(error) = checks.check() {
+                        let error = error.to_string();
+                        assert_eq!(
+                            error.contains("输入监控"),
+                            !accessibility && !input_monitoring
+                        );
+                        assert_eq!(error.contains("辅助功能"), !accessibility && !post_event);
+                    }
+                }
+            }
+        }
     }
 }
 #[derive(Debug, Clone)]

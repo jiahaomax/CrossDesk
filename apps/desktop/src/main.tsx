@@ -14,6 +14,7 @@ import {SwitchingEditor} from './SwitchingEditor';
 import {SettingsView} from './SettingsView';
 import {MouseSpeedControl} from './MouseSpeedControl';
 import {MacPermissions,needsMacPermissions,isMacPermissionError} from './MacPermissions';
+import {macPermissionCapabilities} from './permissionState';
 import {HelpView} from './HelpView';
 import type {Status,Config,Edge,EdgeEnd} from './types';
 import {waitForReceipt} from './commandReceipt';
@@ -175,7 +176,7 @@ function App() {
     setConfig({...current,appearance:{dark:null,debug_info:null,...current.appearance,[key]:value}});
   };
   const s = demoMode ? sample : status;
-  const macPermissionsReady=!!s?.input_permissions&&Object.values(s.input_permissions).every(Boolean);
+  const macPermissionsReady=macPermissionCapabilities(s?.input_permissions).ready;
   useEffect(()=>{
     if(macPermissionsReady){
       setError(old=>isMacPermissionError(old)?'':old);

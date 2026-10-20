@@ -41,7 +41,6 @@ extern "C" {
     fn CGPreflightListenEventAccess() -> bool;
     fn CGPreflightPostEventAccess() -> bool;
     fn CGRequestListenEventAccess() -> bool;
-    fn CGRequestPostEventAccess() -> bool;
     fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
     fn CGDisplayBounds(id: u32) -> CGRect;
     fn CGDisplayPixelsWide(id: u32) -> usize;
@@ -117,10 +116,10 @@ pub fn open_input_permission(kind: &str) -> Result<()> {
     };
     unsafe {
         if kind == "input_monitoring" {
-            if !CGPreflightListenEventAccess() {
+            if !AXIsProcessTrusted() && !CGPreflightListenEventAccess() {
                 CGRequestListenEventAccess();
             }
-        } else if !AXIsProcessTrusted() {
+        } else if !AXIsProcessTrusted() && !CGPreflightPostEventAccess() {
             let key = kAXTrustedCheckOptionPrompt;
             let value = kCFBooleanTrue;
             let options = CFDictionaryCreate(null(), &key, &value, 1, null(), null());
@@ -129,8 +128,6 @@ pub fn open_input_permission(kind: &str) -> Result<()> {
             }
             AXIsProcessTrustedWithOptions(options);
             CFRelease(options);
-        } else if !CGPreflightPostEventAccess() {
-            CGRequestPostEventAccess();
         }
     }
     let result = std::process::Command::new("/usr/bin/open")
@@ -338,8 +335,10 @@ const KEYS: &[(u16, u16)] = &[
     (126, 82),
 ];
 pub fn inject(event: &InputEvent) -> Result<()> {
-    if !unsafe { CGPreflightPostEventAccess() } {
-        bail!("macOS Accessibility permission missing for crossdesk-daemon");
+    // An Accessibility grant includes event posting even when the separate
+    // PostEvent preflight has no grant of its own. Keep the native OS check.
+    if !unsafe { AXIsProcessTrusted() || CGPreflightPostEventAccess() } {
+        bail!("当前键鼠后台尚未取得辅助功能权限");
     }
     unsafe {
         let native = match event {
