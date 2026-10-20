@@ -132,7 +132,7 @@ def sign_app(app, env):
             raise RuntimeError("Signature is not anchored to the stable signing certificate")
         with tempfile.TemporaryDirectory(prefix="crossdesk-public-cert-") as directory:
             prefix = str(Path(directory) / "certificate")
-            run("/usr/bin/codesign", "-d", "--extract-certificates", prefix, path)
+            run("/usr/bin/codesign", "-d", f"--extract-certificates={prefix}", path)
             if hashlib.sha256(Path(prefix + "0").read_bytes()).hexdigest() != expected:
                 raise RuntimeError("Signed app certificate does not match the pinned identity")
         report["requirements"][identifier] = dr
