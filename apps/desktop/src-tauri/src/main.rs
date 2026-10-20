@@ -63,6 +63,7 @@ impl Backend {
             "pause",
             "quit",
             "refresh",
+            "open_permission",
             "discover",
             "pair_open",
             "pair_connect",

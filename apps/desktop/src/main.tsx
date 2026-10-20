@@ -13,6 +13,7 @@ import {ConnectionPanel} from './ConnectionPanel';
 import {SwitchingEditor} from './SwitchingEditor';
 import {SettingsView} from './SettingsView';
 import {MouseSpeedControl} from './MouseSpeedControl';
+import {MacPermissions,needsMacPermissions,isMacPermissionError} from './MacPermissions';
 import {HelpView} from './HelpView';
 import type {Status,Config,Edge,EdgeEnd} from './types';
 import {waitForReceipt} from './commandReceipt';
@@ -29,6 +30,7 @@ function App() {
   const [selected, setSelected] = useState<ScreenSelection>(null);
   const [edgeOpen, setEdgeOpen] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
+  const [permissionOpen,setPermissionOpen]=useState(false);
   const [demoControls, setDemoControls] = useState(false);
   const [platform, setPlatform] = useState<Platform>(detectPlatform);
   const [scenario, setScenario] = useState<Scenario>('workspace');
@@ -130,7 +132,8 @@ function App() {
       configure: "设置已保存。",
       trust: "配对已保存。",
       revoke: "已撤销这台电脑的信任。",
-      refresh: "显示器已刷新。",
+      refresh: "设备状态已刷新。",
+      open_permission: "已请求打开系统设置，请在对应权限中开启 CrossDesk。",
       discover: "正在搜索电脑…",
       pair_open: "配对码已生成，请在另一台电脑输入本机 IP 和这个配对码。",
       pair_connect: "正在连接对方。请查看配对区域，并在两台电脑上确认。",
@@ -172,6 +175,13 @@ function App() {
     setConfig({...current,appearance:{dark:null,debug_info:null,...current.appearance,[key]:value}});
   };
   const s = demoMode ? sample : status;
+  const macPermissionsReady=!!s?.input_permissions&&Object.values(s.input_permissions).every(Boolean);
+  useEffect(()=>{
+    if(macPermissionsReady){
+      setError(old=>isMacPermissionError(old)?'':old);
+      setRetainedError(old=>isMacPermissionError(old)?'':old);
+    }
+  },[macPermissionsReady]);
   useEffect(() => {
     if (isTauri() && demoMode && status?.enabled) {
       setDemo(false);
@@ -234,7 +244,8 @@ function App() {
   };
   useEffect(() => { if (status?.last_error&&!configErrors.current.has(status.last_error)) setRetainedError(status.last_error); }, [status?.last_error]);
   const backendError=status?.last_error&&!configErrors.current.has(status.last_error)?status.last_error:'';
-  const currentError = demoMode ? (scenario==='unavailable' ? 'Demo：后台响应不可用，无法读取设备状态。' : s?.last_error ?? '') : readError || error || backendError || retainedError;
+  const unresolvedError = demoMode ? (scenario==='unavailable' ? 'Demo：后台响应不可用，无法读取设备状态。' : s?.last_error ?? '') : readError || error || backendError || retainedError;
+  const currentError = macPermissionsReady&&isMacPermissionError(unresolvedError)?'':unresolvedError;
   const pairingBusy = !!s?.pairing && ['listening','connecting','confirming','waiting'].includes(s.pairing.phase);
   const demoBlockedReason = status?.enabled ? '请先暂停真实共享' : busyCommand||dirty ? '请等待设置保存和当前操作完成' : status?.pairing && ['listening','connecting','confirming','waiting'].includes(status.pairing.phase) ? '请先完成或取消真实配对' : isTauri() && (!status || readFailed) ? '尚不能确认后台状态，暂不能进入演示' : '';
   const toggleDemo = () => {
@@ -265,6 +276,7 @@ function App() {
   const edgeNames = {Left:'左边',Right:'右边',Top:'上边',Bottom:'下边'};
   const liveRoute = liveLinks.find(l=>l.enabled&&l.from.device===s?.identity); 
   const local = s?.topology.find(t => t.device.id === s.identity);
+  const permissionNeeded = needsMacPermissions(s);
   const count = s?.topology.reduce((n,t) => n+t.monitors.filter(m=>m.enabled).length,0) ?? 0;
   const navigate = (next:string) => setTab(next);
   const openConnection = () => { setConnectOpen(true); setTab('connections'); };
@@ -284,9 +296,10 @@ function App() {
       <div className="sidebar-bottom"><button className="theme-toggle" aria-label={dark?"切换浅色":"切换深色"} title={dark?"切换浅色":"切换深色"} disabled={editingBusy} onClick={()=>saveAppearance('dark',!dark)}>{dark?<Sun size={17}/>:<Moon size={17}/>}<span className="sr-only">{dark?'切换浅色':'切换深色'}</span></button>{debugInfo&&<div className="version">{version}</div>}</div>
     </aside>
     <main className="main-shell">
-      <header className="app-header"><div className="header-title"><span className="app-wordmark">CrossDesk<span>/</span></span><h1>{{layout:'工作区',connections:'连接',settings:'设置',help:'帮助'}[tab]}</h1>{demoMode&&<span className="demo-badge">DEMO</span>}</div><div className="header-actions">{tab==='layout'&&<Button onClick={openConnection}><Plus size={16}/>连接电脑</Button>}<Button variant="outline" title={unavailableReason||undefined} disabled={demoMode||!status||busyCommand==='pause'||(readFailed&&!canPause)} onClick={()=>cmd(canPause?'pause':'resume')}>{busyCommand==='pause'||busyCommand==='resume'?<Loader2 size={16} className="spin"/>:canPause?<Pause size={16}/>:<Play size={16}/>} {busyCommand==='pause'?'正在暂停…':busyCommand==='resume'?'正在启用…':!s?'共享不可用':pairingBusy?'停止配对并暂停':canPause?'暂停共享':'启用共享'}</Button></div></header>
+      <header className="app-header"><div className="header-title"><span className="app-wordmark">CrossDesk<span>/</span></span><h1>{{layout:'工作区',connections:'连接',settings:'设置',help:'帮助'}[tab]}</h1>{demoMode&&<span className="demo-badge">DEMO</span>}</div><div className="header-actions">{tab==='layout'&&<Button onClick={openConnection}><Plus size={16}/>连接电脑</Button>}<Button variant="outline" title={unavailableReason||undefined} disabled={demoMode||!status||busyCommand==='pause'||(readFailed&&!canPause)} onClick={()=>canPause?void cmd('pause'):permissionNeeded?setPermissionOpen(true):void cmd('resume')}>{busyCommand==='pause'||busyCommand==='resume'?<Loader2 size={16} className="spin"/>:canPause?<Pause size={16}/>:<Play size={16}/>} {busyCommand==='pause'?'正在暂停…':busyCommand==='resume'?'正在启用…':!s?'共享不可用':pairingBusy?'停止配对并暂停':canPause?'暂停共享':'启用共享'}</Button></div></header>
       <div className="status-bar" role="status"><div><span className={s?.enabled&&!(readFailed&&!demoMode)?'status-dot':'status-dot paused-dot'}/><strong>{readFailed&&!demoMode?'后台不可用':!s?(demoMode&&scenario==='loading'?'正在读取':isTauri()&&!readFailed?'正在读取后台':'未连接后台'):s.observe_only?'连接测试模式':s.enabled?'共享已启用':'共享已暂停'}</strong>{(debugInfo||!!s?.source)&&<><span className="status-divider"/><span className="control-relation">{readFailed&&!demoMode?'状态待更新':s?debugInfo?controlLabel(s):s.active&&s.source!==s.active?controlLabel(s):'控制状态未知':'设备状态待更新'}</span></>}</div>{demoMode&&<button className="text-button" onClick={()=>setDemoControls(!demoControls)} aria-expanded={demoControls}><FlaskConical size={14}/>示例与平台<ChevronDown size={14}/></button>}</div>
       {demoMode&&demoControls&&<div className="demo-controls"><label>示例状态<select aria-label="Demo 状态" value={scenario} onChange={e=>{setScenario(e.target.value as Scenario);setSelected(null);}}>{Object.entries(scenarioNames).map(([id,name])=><option value={id} key={id}>{name}</option>)}</select></label><label>平台界面<select aria-label="预览平台" value={platform} onChange={e=>setPlatform(e.target.value as Platform)}><option value="windows">Windows</option><option value="macos">macOS · 未验证</option><option value="ubuntu">Ubuntu · 后台未接入</option></select></label><p>示例数据 · 不执行网络、配置或输入命令</p></div>}
+      {permissionNeeded&&!demoMode&&<div className="permission-reminder"><span>开启 Mac 权限后即可共享键鼠</span><Button variant="outline" disabled={readFailed} onClick={()=>{setError('');setPermissionOpen(true);}}>设置权限</Button></div>}
       {feedback&&!demoMode&&<div className="command-feedback" role="status" aria-live="polite">{busyCommand?<Loader2 size={16} className="spin"/>:<CheckCircle2 size={16}/>}<span>{feedback}</span>{!busyCommand&&<Button variant="ghost" size="icon" aria-label="关闭操作提示" onClick={()=>setFeedback('')}><X size={15}/></Button>}</div>}
       {currentError&&currentError!==dismissedError&&<div className="global-error"><ErrorNotice raw={currentError} onDismiss={()=>setDismissedError(currentError)}/></div>}
       {currentError&&currentError===dismissedError&&<button className="issue-reminder" onClick={()=>setDismissedError('')}>有一条待查看的错误 · 展开详情</button>}
@@ -298,7 +311,7 @@ function App() {
         <button className="edge-disclosure" disabled={!s} onClick={()=>setEdgeOpen(true)}><span><Waypoints size={17}/><strong>电脑方向</strong><small>{liveRoute ? `${edgeNames[liveRoute.from.edge]} → ${s?.topology.find(t=>t.device.id===liveRoute.to.device)?.device.name??'对方'} · ${edgeNames[liveRoute.to.edge]}` : s ? `未设置` : '等待连接'}</small></span><ChevronRight size={17}/></button>
         <div className="workspace-mouse-setting"><div><strong>鼠标移动</strong><small>仅本机 · 跨电脑后的速度</small></div><MouseSpeedControl label="鼠标移动速度" value={s?.config.tuning&&cfg.tuning?.mouse_speed} disabled={demoMode||!status||editingBusy||!!settingsBlocked} onChange={mouse_speed=>cfg.tuning&&setConfig({...cfg,tuning:{...cfg.tuning,mouse_speed}})}/></div></div>
         <div hidden={tab!=='connections'}><ConnectionPanel debugInfo={debugInfo} status={s} demo={demoMode} unavailable={readFailed&&!demoMode} commandError={error} cmd={cmd} pending={busyCommand} open={connectOpen} setOpen={setConnectOpen} onWorkspace={()=>setTab('layout')}/></div>
-        <div hidden={tab!=='settings'}><SettingsView debugInfo={debugInfo} setDebugInfo={v=>saveAppearance('debug_info',v)} onEdges={()=>setEdgeOpen(true)} status={s} config={demoMode&&sample?sample.config:cfg} onChange={setConfig} saveProblem={saveProblem} blocked={settingsBlocked} cmd={cmd} demo={demoMode} toggleDemo={toggleDemo} demoBlockedReason={demoBlockedReason} pending={busyCommand} dark={dark} setDark={v=>saveAppearance('dark',v)} platform={platform} onQuit={quitApp} addresses={<section className="panel">
+        <div hidden={tab!=='settings'}><SettingsView onPermissions={()=>{setError('');setPermissionOpen(true);}} debugInfo={debugInfo} setDebugInfo={v=>saveAppearance('debug_info',v)} onEdges={()=>setEdgeOpen(true)} status={s} config={demoMode&&sample?sample.config:cfg} onChange={setConfig} saveProblem={saveProblem} blocked={settingsBlocked} cmd={cmd} demo={demoMode} toggleDemo={toggleDemo} demoBlockedReason={demoBlockedReason} pending={busyCommand} dark={dark} setDark={v=>saveAppearance('dark',v)} platform={platform} onQuit={quitApp} addresses={<section className="panel">
               <h2>电脑地址</h2>
               <p>
                 对方 IP 变更时，在这里更新。
@@ -366,6 +379,9 @@ function App() {
       </div>
       <footer className="app-footer">{saveState&&<span className="autosave-status" role="status">{saveState}{saveError&&<button className="text-button" disabled={!!busyCommand||!!settingsBlocked} onClick={()=>{setSaveError('');void save();}}>重试</button>}</span>}{demoMode&&<span><FlaskConical size={14}/>示例数据</span>}<button className="footer-help" onClick={()=>setTab('help')}><Keyboard size={14}/>紧急释放 <kbd>{emergencyLabel(s)}</kbd></button></footer>
     </main>
+    <Dialog title="Mac 键鼠权限" open={permissionOpen} onClose={()=>setPermissionOpen(false)}>
+      <MacPermissions status={s} disabled={demoMode||!status||readFailed} pending={busyCommand} problem={error} onCommand={cmd} onEnable={()=>{setPermissionOpen(false);void cmd('resume');}}/>
+    </Dialog>
     <Dialog title="切换方向" open={edgeOpen} onClose={()=>setEdgeOpen(false)} wide>
       {error&&<ErrorNotice raw={error}/>}
       {s&&<SwitchingEditor status={s} links={cfg.links} disabled={demoMode||!status||editingBusy||!!settingsBlocked} onChange={links=>setConfig({...cfg,links})}/>}

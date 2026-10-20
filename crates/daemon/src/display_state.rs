@@ -18,6 +18,9 @@ pub async fn refresh(
     id: &str,
     version: &mut u64,
 ) -> Result<()> {
+    update(status, |s| {
+        s.input_permissions = crossdesk_platform::input_permissions()
+    });
     let read = crossdesk_platform::topology(id, *version);
     reconcile(status, running, id, version, read).await
 }
@@ -91,6 +94,7 @@ mod tests {
     };
     fn status(local: DeviceTopology) -> SharedStatus {
         Arc::new(Mutex::new(Status {
+            input_permissions: None,
             local_addresses: vec![],
             local_addresses_error: None,
             diagnostics_path: None,

@@ -59,6 +59,7 @@ export type Config = {
   };
 };
 export type Status = {
+  input_permissions?: {accessibility: boolean; input_monitoring: boolean; post_event: boolean} | null;
   local_addresses?: {name: string; address: string}[];
   local_addresses_error?: string | null;
   diagnostics_path?: string | null;

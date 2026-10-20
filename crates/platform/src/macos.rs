@@ -1,6 +1,6 @@
 //! macOS CI builds pass on arm64 and x86_64; physical native input acceptance is pending.
 //! Quartz coordinates are global desktop points; backing pixels remain a separate field.
-use crate::NativeEvent;
+use crate::{InputPermissions, NativeEvent};
 use anyhow::{bail, Context, Result};
 use crossdesk_core::*;
 use std::{
@@ -36,8 +36,12 @@ type TapCallback = unsafe extern "C" fn(*mut c_void, u32, Event, *mut c_void) ->
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrustedWithOptions(options: CFRef) -> bool;
+    static kAXTrustedCheckOptionPrompt: CFRef;
     fn CGPreflightListenEventAccess() -> bool;
     fn CGPreflightPostEventAccess() -> bool;
+    fn CGRequestListenEventAccess() -> bool;
+    fn CGRequestPostEventAccess() -> bool;
     fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
     fn CGDisplayBounds(id: u32) -> CGRect;
     fn CGDisplayPixelsWide(id: u32) -> usize;
@@ -70,6 +74,15 @@ extern "C" {
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     fn CFRelease(value: CFRef);
+    static kCFBooleanTrue: CFRef;
+    fn CFDictionaryCreate(
+        allocator: CFRef,
+        keys: *const CFRef,
+        values: *const CFRef,
+        count: isize,
+        key_callbacks: CFRef,
+        value_callbacks: CFRef,
+    ) -> CFRef;
     fn CFUUIDCreateString(allocator: CFRef, uuid: CFRef) -> CFRef;
     fn CFStringGetCString(value: CFRef, buffer: *mut i8, size: isize, encoding: u32) -> bool;
     fn CFMachPortCreateRunLoopSource(allocator: CFRef, port: CFRef, order: isize) -> CFRef;
@@ -83,9 +96,53 @@ pub fn dpi_awareness() -> Result<()> {
     Ok(())
 }
 fn permitted() -> bool {
+    input_permissions().is_some_and(|p| p.ready())
+}
+pub fn input_permissions() -> Option<InputPermissions> {
+    Some(unsafe {
+        InputPermissions {
+            accessibility: AXIsProcessTrusted(),
+            input_monitoring: CGPreflightListenEventAccess(),
+            post_event: CGPreflightPostEventAccess(),
+        }
+    })
+}
+/// Only called after an explicit click. Request from the actual input process,
+/// so macOS can add it to the appropriate privacy list; never prompt on polling.
+pub fn open_input_permission(kind: &str) -> Result<()> {
+    let pane = match kind {
+        "accessibility" => "Privacy_Accessibility",
+        "input_monitoring" => "Privacy_ListenEvent",
+        _ => bail!("未知权限设置"),
+    };
     unsafe {
-        AXIsProcessTrusted() && CGPreflightListenEventAccess() && CGPreflightPostEventAccess()
+        if kind == "input_monitoring" {
+            if !CGPreflightListenEventAccess() {
+                CGRequestListenEventAccess();
+            }
+        } else if !AXIsProcessTrusted() {
+            let key = kAXTrustedCheckOptionPrompt;
+            let value = kCFBooleanTrue;
+            let options = CFDictionaryCreate(null(), &key, &value, 1, null(), null());
+            if options.is_null() {
+                bail!("无法向系统申请辅助功能权限");
+            }
+            AXIsProcessTrustedWithOptions(options);
+            CFRelease(options);
+        } else if !CGPreflightPostEventAccess() {
+            CGRequestPostEventAccess();
+        }
     }
+    let result = std::process::Command::new("/usr/bin/open")
+        .arg(format!(
+            "x-apple.systempreferences:com.apple.preference.security?{pane}"
+        ))
+        .status()
+        .context("无法打开系统设置，请手动进入系统设置 → 隐私与安全性")?;
+    if !result.success() {
+        bail!("无法打开系统设置，请手动进入系统设置 → 隐私与安全性");
+    }
+    Ok(())
 }
 unsafe fn display_uuid(id: u32) -> Result<String> {
     let uuid = CGDisplayCreateUUIDFromDisplayID(id);

@@ -49,6 +49,9 @@ enum Command {
     Pause,
     Quit,
     Refresh,
+    OpenPermission {
+        kind: String,
+    },
     Discover,
     PairOpen,
     PairConnect {
@@ -161,6 +164,7 @@ async fn run() -> Result<()> {
         }
     };
     let status = Arc::new(Mutex::new(Status {
+        input_permissions: platform::input_permissions(),
         local_addresses: vec![],
         local_addresses_error: None,
         diagnostics_path: None,
@@ -266,7 +270,7 @@ async fn run() -> Result<()> {
                             let port_changed=old.port!=config.port;
                             let reconnect=port_changed||old.endpoints!=config.endpoints||old.same_subnet_only!=config.same_subnet_only||old.tuning.lease_ms!=config.tuning.lease_ms;
                             let topologies=status.lock().unwrap().topology.clone();
-                            crossdesk_core::Layout{topologies,links:config.links.clone()}.validate().map_err(anyhow::Error::msg)?;
+                            layout_sync::validate_edit(&old,&config,topologies)?;
                             if !reconnect {
                                 if let Some(r)=running.as_ref().filter(|r|!r.task.is_finished()) {
                                     let (done,result)=tokio::sync::oneshot::channel();
@@ -294,14 +298,19 @@ async fn run() -> Result<()> {
                         Command::Trust{certificate,fingerprint,name}=>{stop_running(&mut running).await;trust(&dir,certificate,&fingerprint,name)?;let peers=load_trust(&dir)?;update(&status,|s|s.trusted=peers);},
                         Command::Revoke{id}=>{stop_running(&mut running).await;revoke(&dir,&id)?;let peers=load_trust(&dir)?;update(&status,|s|{s.trusted=peers;s.connection_issues.remove(&id);});},
                         Command::Refresh=>{refresh_addresses(&status);display_state::refresh(&status,&mut running,&identity.id,&mut version).await?;},
+                        Command::OpenPermission{kind}=>{
+                            platform::open_input_permission(&kind)?;
+                            display_state::refresh(&status,&mut running,&identity.id,&mut version).await?;
+                        },
                         Command::Discover=>{refresh_addresses(&status);if let Some(d)=discovery.take(){let _=d.shutdown();}discovery=Some(discovery::start(&identity.id,status.clone())?);update(&status,|s|s.discovery_error=None);},
                         Command::ExportDiagnostics=>{
                             let incidents=safety::history(&dir);
-                            let s=status.lock().unwrap();let sanitized=serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"diagnostics_schema":2,"platform":std::env::consts::OS,"protocol":crossdesk_transport::protocol::VERSION,"test_edition":crossdesk_core::profile::IS_TEST,"state":s.state,"connected_devices":s.topology.len(),"display_counts":s.topology.iter().map(|t|t.monitors.len()).collect::<Vec<_>>(),"rtt_ms":s.rtt_ms,"received_count":s.received,"sharing":s.enabled,"safety_history":incidents.as_ref().ok(),"safety_history_read_failed":incidents.is_err()});
+                            let s=status.lock().unwrap();let sanitized=serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"diagnostics_schema":2,"platform":std::env::consts::OS,"protocol":crossdesk_transport::protocol::VERSION,"test_edition":crossdesk_core::profile::IS_TEST,"state":s.state,"connected_devices":s.topology.len(),"display_counts":s.topology.iter().map(|t|t.monitors.len()).collect::<Vec<_>>(),"rtt_ms":s.rtt_ms,"received_count":s.received,"sharing":s.enabled,"input_permissions":s.input_permissions,"safety_history":incidents.as_ref().ok(),"safety_history_read_failed":incidents.is_err()});
                             atomic_save(&dir.join("diagnostics.json"),&serde_json::to_vec_pretty(&sanitized)?)?;drop(s);update(&status,|s|s.diagnostics_path=Some(dir.join("diagnostics.json").to_string_lossy().into_owned()));
                         },
                         Command::StartSource|Command::StartReceiver|Command::Resume=>{
-                            anyhow::ensure!(status.lock().unwrap().topology_error.is_none(), "请先成功读取本机显示器，再恢复共享");
+                            display_state::refresh(&status,&mut running,&identity.id,&mut version).await?;
+                            platform::ensure_input_permissions()?;
                             stop_running(&mut running).await;
                             let mut config=status.lock().unwrap().config.clone();config.sharing=true;config.save()?;
                             update(&status,|s|{s.config=config;s.enabled=true;s.last_error=None;s.state="正在恢复双向共享".into();});

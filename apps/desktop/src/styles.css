@@ -109,3 +109,13 @@ kbd{font-family:inherit;font-size:13px;white-space:nowrap;padding:3px 7px;border
 @media(max-width:1050px){.workspace-mouse-setting{padding-inline:20px}}
 .workspace-mouse-setting>.mouse-speed-control{gap:8px}
 .switch-shortcut-control{width:284px;flex-shrink:0}.switch-shortcut-fields{display:flex;gap:8px;align-items:center}.switch-shortcut-fields select{width:126px;flex-shrink:0}.shortcut-record{min-height:36px;flex:1;padding:6px 10px;white-space:normal;line-height:1.45;overflow-wrap:anywhere}.shortcut-record.recording{border-color:var(--accent);background:var(--active);color:var(--ink)}.switch-shortcut-control small{line-height:1.6}.switch-shortcut-control .validation-message{padding:0}.switch-shortcut-row{align-items:flex-start}
+
+.permission-reminder{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:7px 24px;background:var(--paper);border-bottom:1px solid var(--line);font-size:14px;flex-shrink:0}
+.mac-permissions>p{margin:0 0 14px;line-height:1.65}
+.permission-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:16px 0;border-top:1px solid var(--line)}
+.permission-row p{margin:5px 0 7px;font-size:14px;color:var(--muted)}
+.permission-row span{display:flex;align-items:center;gap:5px;font-size:13px}
+.permission-row .permission-granted{color:var(--accent)}
+.permission-row>.button{flex-shrink:0}
+.permission-troubleshooting{font-size:13px;line-height:1.65}
+.permission-troubleshooting p{margin:8px 0}

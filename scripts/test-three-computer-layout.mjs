@@ -103,6 +103,10 @@ try {
   assert.equal(newPair.length,2);
   assert.notEqual(newPair.find(l=>l.from.device===a.status.identity).from.edge,'Right','occupied edge not reused');
   console.log('PASS third computer joins existing saved pair; both ends agree on free edge, TLS stays online, zero input');
+  if(process.env.CROSSDESK_CAPTURE_THREE_LAYOUT==='1') {
+    const {captureThreeLayout}=await import('./check-three-layout-browser.mjs');
+    await captureThreeLayout(a,b,c);
+  }
 
   const newPlacement=placePeer(b.status.topology,b.status.effective_links,b.status.identity,a.status.identity,'Top');
   await command(b,'configure',{config:{...b.status.config,links:newPlacement}});
@@ -121,6 +125,16 @@ try {
   await quit(c);
   await until(a,s=>!s.topology.some(t=>t.device.id===c.status.identity&&t.device.online),'peer offline');
   assert.ok(a.status.topology.some(t=>t.device.id===b.status.identity&&t.device.online));
+  await quit(a);a=start(a.name);
+  await until(a,s=>!!s.config,'hub restart with C absent');
+  await Promise.all([online(a,b),online(b,a)]);
+  assert.ok(!a.status.topology.some(t=>t.device.id===c.status.identity),'no cached C topology after cold start');
+  await command(a,'configure',{config:{...a.status.config,tuning:{...a.status.config.tuning,mouse_speed:1.25}}});
+  const moved=placePeer(a.status.topology,a.status.config.links,a.status.identity,b.status.identity,'Left');
+  await command(a,'configure',{config:{...a.status.config,links:moved}});
+  await until(b,()=>normalized(links(a,a.status.identity,b.status.identity))===normalized(links(b,a.status.identity,b.status.identity)),'A/B layout saved while C absent');
+  assert.equal(normalized(links(a,a.status.identity,c.status.identity)),normalized(saved),'unseen C saved route preserved');
+  console.log('PASS speed and layout autosave after cold start with an absent third peer; unchanged unseen routes preserved');
   c=start(cName);await until(c,s=>!!s.config,'peer restart');
   await stable(a,b,c);
   assert.equal(normalized(links(a,a.status.identity,c.status.identity)),normalized(saved));

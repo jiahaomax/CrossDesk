@@ -81,6 +81,29 @@ fn validate_present(topologies: &[DeviceTopology], links: &[EdgeLink]) -> Result
     .map_err(anyhow::Error::msg)
 }
 
+/// Local edits may carry saved routes to a computer that has not connected in
+/// this process. Preserve those exact routes, but never accept new unknown ones.
+pub fn validate_edit(old: &Config, next: &Config, topologies: Vec<DeviceTopology>) -> Result<()> {
+    let known = |id: &str| topologies.iter().any(|t| t.device.id == id);
+    for link in &next.links {
+        if !known(&link.from.device) || !known(&link.to.device) {
+            ensure!(
+                old.links.contains(link),
+                "尚未收到这台电脑的屏幕信息，请等它上线后再调整方向"
+            );
+        }
+    }
+    let links = next
+        .links
+        .iter()
+        .filter(|l| known(&l.from.device) && known(&l.to.device))
+        .cloned()
+        .collect();
+    Layout { topologies, links }
+        .validate()
+        .map_err(anyhow::Error::msg)
+}
+
 fn fits(topologies: &[DeviceTopology], saved: &[EdgeLink], candidate: &[EdgeLink]) -> bool {
     if candidate.iter().any(|a| {
         saved.iter().any(|b| {
@@ -254,6 +277,40 @@ pub fn merge(
 mod tests {
     use super::*;
     use crossdesk_core::*;
+    #[test]
+    fn editing_online_pair_and_speed_preserves_unseen_computer_but_rejects_new_unknown_routes() {
+        let all = topologies();
+        let mut old = Config {
+            links: crate::peers::default_links(&all),
+            ..Default::default()
+        };
+        // B is the local hub; A has not reported a topology since cold start.
+        let present = all
+            .into_iter()
+            .filter(|t| t.device.id != "A")
+            .collect::<Vec<_>>();
+        let mut next = old.clone();
+        next.tuning.mouse_speed = 1.25;
+        validate_edit(&old, &next, present.clone()).unwrap();
+        let known_route = next
+            .links
+            .iter_mut()
+            .find(|l| l.from.device == "B" && l.to.device == "C")
+            .unwrap();
+        known_route.from.edge = Edge::Bottom;
+        known_route.to.edge = Edge::Top;
+        validate_edit(&old, &next, present.clone()).unwrap();
+        next.links[0].from.end = 0.5;
+        assert!(validate_edit(&old, &next, present.clone()).is_err());
+        old.links
+            .retain(|l| l.from.device != "A" && l.to.device != "A");
+        next = old.clone();
+        next.links[0].to.monitor = "missing".into();
+        assert!(validate_edit(&old, &next, present.clone()).is_err());
+        next = old.clone();
+        next.links.push(next.links[0].clone());
+        assert!(validate_edit(&old, &next, present).is_err());
+    }
     fn topologies() -> Vec<DeviceTopology> {
         ["A", "B", "C"]
             .iter()

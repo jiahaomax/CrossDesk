@@ -9,6 +9,7 @@ pub struct CommandOutcome {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Status {
+    pub input_permissions: Option<crossdesk_platform::InputPermissions>,
     pub local_addresses: Vec<LocalAddress>,
     pub local_addresses_error: Option<String>,
     pub diagnostics_path: Option<String>,

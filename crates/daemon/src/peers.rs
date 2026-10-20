@@ -350,12 +350,11 @@ impl Manager {
     fn configure(&mut self, mut next: Config) -> Result<()> {
         next.sharing = self.config.sharing;
         next.validate()?;
-        Layout {
-            topologies: self.status.lock().unwrap().topology.clone(),
-            links: next.links.clone(),
-        }
-        .validate()
-        .map_err(anyhow::Error::msg)?;
+        crate::layout_sync::validate_edit(
+            &self.config,
+            &next,
+            self.status.lock().unwrap().topology.clone(),
+        )?;
         let peers = self
             .status
             .lock()
@@ -655,6 +654,7 @@ impl Manager {
             return Ok(());
         }
         crate::native::ensure_cleanup_confirmed()?;
+        platform::ensure_input_permissions()?;
         let mut layout = self.layout();
         for topology in &mut layout.topologies {
             if self
@@ -1290,6 +1290,7 @@ mod tests {
             ..Config::default()
         };
         let status = Arc::new(std::sync::Mutex::new(Status {
+            input_permissions: None,
             local_addresses: vec![],
             local_addresses_error: None,
             diagnostics_path: None,
