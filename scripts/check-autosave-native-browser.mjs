@@ -40,10 +40,15 @@ export async function checkAutosave(a,b) {
       await p.getByRole('slider',{name:'鼠标移动速度'}).waitFor();pages.push(p);
     }
     const [pa,pb]=pages,sa=pa.getByRole('slider',{name:'鼠标移动速度'}),sb=pb.getByRole('slider',{name:'鼠标移动速度'});
-    await sa.fill('2.25');await until(()=>b.status.config.tuning.mouse_speed===2.25,'A to B native save');
-    await until(async()=>await sb.inputValue()==='2.25','B UI poll');
-    await sb.fill('1.5');await until(()=>a.status.config.tuning.mouse_speed===1.5,'B to A native save');
-    await until(async()=>await sa.inputValue()==='1.5','A UI poll');
+    await sa.fill('2.25');await until(()=>a.status.config.tuning.mouse_speed===2.25,'A local save');
+    await pa.getByRole('button',{name:'加快鼠标移动速度',exact:true}).click();
+    await until(()=>a.status.config.tuning.mouse_speed===2.3,'A increment saves exactly 0.05');
+    await wait(900);assert.equal(b.status.config.tuning.mouse_speed,1.5);assert.equal(await sb.inputValue(),'1.5');
+    await pb.getByRole('button',{name:'减慢鼠标移动速度',exact:true}).click();
+    await until(()=>b.status.config.tuning.mouse_speed===1.45,'B decrement saves exactly 0.05');
+    await pb.getByRole('button',{name:'加快鼠标移动速度',exact:true}).click();
+    await until(()=>b.status.config.tuning.mouse_speed===1.5,'B local save');
+    await wait(900);assert.equal(a.status.config.tuning.mouse_speed,2.3);assert.equal(await sa.inputValue(),'2.3');
     const out=path.resolve(process.env.UI_CAPTURE_DIRECTORY||'output/playwright/mouse-handoff-2026-10-20');fs.mkdirSync(out,{recursive:true});
     for(const [index,p] of pages.entries()){await p.evaluate(()=>{const label=document.createElement('div');label.textContent='真实后台 · 隔离测试 · 未捕获输入';label.style='position:fixed;bottom:7px;left:40%;font:13px Segoe UI;color:#805b15;background:#fff6df;z-index:99;padding:2px 8px';document.body.append(label);});await p.screenshot({path:path.join(out,`native-home-${index+1}-1200.png`)});}
     await pa.getByRole('navigation',{name:'主导航',exact:true}).getByRole('button',{name:'工作区',exact:true}).click();
@@ -54,7 +59,7 @@ export async function checkAutosave(a,b) {
     await until(()=>a.status.config.links.some(l=>l.from.device===a.status.identity&&l.from.edge==='Top'),'drag applies routes');
     await until(()=>JSON.stringify(a.status.config.links)===JSON.stringify(b.status.config.links),'drag synchronizes real backend');
     for(const d of [a,b]) {assert.equal(d.status.received,0);assert.equal(d.status.active,null);assert.equal(d.status.observe_only,true);}
-    assert.deepEqual(errors,[]);assert.equal(commands.length,3,'speed in both directions and one layout drag, no save-button commands');
-    console.log('PASS browser autosave → real daemon receipt → TLS peer → second UI; reciprocal speed and dragged layout, zero native input');
+    assert.deepEqual(errors,[]);assert.equal(commands.length,5,'four local speed edits and one shared layout drag');
+    console.log('PASS independent local mouse speeds, +/- 0.05 and autosave receipts; dragged layout still synchronizes over TLS, zero native input');
   } finally {await browser.close();await new Promise(r=>server.close(r));}
 }

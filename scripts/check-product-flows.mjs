@@ -2,6 +2,13 @@
 import assert from 'node:assert/strict';
 import {receiveConfig,editConfig,isDirty,validateConfig,pairingAddressError} from '../apps/desktop/src/configDraft.ts';
 import {waitForReceipt} from '../apps/desktop/src/commandReceipt.ts';
+import {keyFromCode,shortcutError,shortcutLabel} from '../apps/desktop/src/switchShortcut.ts';
+assert.equal(keyFromCode('ControlRight'),224);
+assert.equal(keyFromCode('KeyK'),14);
+assert.equal(keyFromCode('Fn'),undefined);
+assert.equal(shortcutLabel({Keys:[224,225,14]}),'Ctrl + Shift + K');
+assert.equal(shortcutError({Keys:[226,65]},41),null);
+for(const keys of [[],[224,228],[300],[224,226,41],[1,2,3,4,5,6,7]])assert.ok(shortcutError({Keys:keys},41));
 const initial={version:1,port:24872,sharing:true,endpoints:[],links:[]};
 let d=receiveConfig(null,initial);
 assert.equal(isDirty(d),false);

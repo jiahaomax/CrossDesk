@@ -34,7 +34,11 @@ try {
  for(const [width,height,theme] of [[940,640,'light'],[1200,820,'light'],[940,640,'dark']]) {
   const t=await setup({width,height,theme});const p=t.page;
   await nav(t,'设置');await p.getByRole('button',{name:'输入与快捷键',exact:true}).click();
-  const speed=p.getByRole('slider',{name:'远端鼠标速度'}),modifier=p.getByLabel('跨机切换按键');
+  await capture(t,`initial-settings-${width}-${theme}-FIXTURE`);
+  await nav(t,'工作区');await capture(t,`initial-home-${width}-${theme}-FIXTURE`);
+  if(before){await t.ctx.close();continue;}
+  await nav(t,'设置');await p.getByRole('button',{name:'输入与快捷键',exact:true}).click();
+  const speed=p.getByRole('slider',{name:'远端鼠标速度'}),modifier=p.getByLabel('切换按键方式');
   assert.equal(await p.getByRole('button',{name:/保存设置|放弃修改/}).count(),0);
   assert.equal(await speed.inputValue(),'1');
   for(const value of ['1.5','2','2.5']){await speed.fill(value);await wait(70);}
@@ -51,9 +55,9 @@ try {
   await wait(150);assert.equal(await speed.inputValue(),'3','old receipt cannot roll the control back');
   await until(()=>t.state.config.tuning.mouse_speed===3,'newest edit applied');await wait(400);
   assert.equal(t.commands.length,3);assert.equal(await speed.evaluate(el=>el===document.activeElement),true);
-  // A genuine later remote save wins without refresh/discard, preserving focus.
+  // A later local backend update is applied without refresh/discard, preserving focus.
   t.state.config.tuning.mouse_speed=1.5;t.state.config.tuning.switch_modifier='None';
-  await until(async()=>await speed.inputValue()==='1.5','remote rebase');
+  await until(async()=>await speed.inputValue()==='1.5','local backend rebase');
   assert.equal(await modifier.inputValue(),'None');assert.equal(await speed.evaluate(el=>el===document.activeElement),true);
   assert.equal(await p.getByText(/后台同时修改|放弃草稿|另一处修改/).count(),0);
   t.delay(200);t.fail();await speed.fill('2.5');
@@ -68,7 +72,28 @@ try {
   const heartbeat=p.getByLabel('心跳间隔（50–200 ms）');const beforeInvalid=t.commands.length;
   await heartbeat.fill('2');await wait(800);assert.equal(t.commands.length,beforeInvalid);
   await heartbeat.fill('120');await until(()=>t.state.config.tuning.heartbeat_ms===120,'valid number');
-  await nav(t,'帮助');assert.ok((await p.locator('.help-page').innerText()).includes('直接移向边缘'));
+  await p.getByText('高级发送节奏与安全超时',{exact:true}).click();
+  const recorder=p.getByRole('button',{name:'录入跨机切换按键',exact:true});
+  await modifier.selectOption('Custom');
+  assert.equal(await recorder.evaluate(el=>el===document.activeElement),true,'recording receives focus');
+  await p.keyboard.down('Control');await p.keyboard.down('Shift');await p.keyboard.down('KeyK');
+  await capture(t,`recording-${width}-${theme}-FIXTURE`);
+  await p.keyboard.up('KeyK');await p.keyboard.up('Shift');await p.keyboard.up('Control');
+  await until(()=>JSON.stringify(t.state.config.tuning.switch_modifier)===JSON.stringify({Keys:[224,225,14]}),'custom chord autosave');
+  await capture(t,`custom-shortcut-${width}-${theme}-FIXTURE`);
+  await recorder.click();await p.keyboard.press('F8');
+  await until(()=>JSON.stringify(t.state.config.tuning.switch_modifier)===JSON.stringify({Keys:[65]}),'single function key autosave');
+  await recorder.click();await p.keyboard.press('Tab');
+  await until(()=>JSON.stringify(t.state.config.tuning.switch_modifier)===JSON.stringify({Keys:[43]}),'Tab can be a recorded key');
+  await p.keyboard.press('Tab');assert.equal(await recorder.evaluate(el=>el===document.activeElement),false,'normal Tab navigation resumes after recording');
+  await recorder.click();await p.keyboard.down('Control');await p.keyboard.down('Alt');await p.keyboard.down('Escape');
+  await p.keyboard.up('Escape');await p.keyboard.up('Alt');await p.keyboard.up('Control');
+  await p.getByText('不能与紧急释放快捷键重合，请换一组按键。',{exact:true}).waitFor();
+  assert.deepEqual(t.state.config.tuning.switch_modifier,{Keys:[43]},'invalid recording preserves saved shortcut');
+  await recorder.click();await p.getByRole('heading',{name:'输入与快捷键',exact:true}).click();
+  assert.equal(await recorder.getAttribute('aria-pressed'),'false','blur cancels recording');
+  await modifier.selectOption('None');await until(()=>t.state.config.tuning.switch_modifier==='None','no-key choice autosave');
+  await nav(t,'帮助');await until(async()=>(await p.locator('.help-page').innerText()).includes('直接移向边缘'),'help displays acknowledged no-key setting');
   await nav(t,'工作区');await wait(500);
   const rect=await p.locator('.device-group[data-device-group="b"] .monitor').first().boundingBox();
   const local=await p.locator('.device-group[data-device-group="a"] .monitor').first().boundingBox();
@@ -83,8 +108,14 @@ try {
   assert.ok((await p.locator('.canvas-wrap').boundingBox()).height>=380,'minimum canvas height');
   await homeSpeed.fill('2.75');await until(()=>t.state.config.tuning.mouse_speed===2.75,'home slider auto save');
   await homeSpeed.focus();await p.keyboard.press('ArrowRight');await until(()=>t.state.config.tuning.mouse_speed===2.8,'home keyboard control');
-  t.state.config.tuning.mouse_speed=1.25;await until(async()=>await homeSpeed.inputValue()==='1.25','home peer update');
+  t.state.config.tuning.mouse_speed=1.25;await until(async()=>await homeSpeed.inputValue()==='1.25','home local backend update');
   assert.equal(await homeSpeed.evaluate(el=>el===document.activeElement),true);
+  const slower=p.getByRole('button',{name:'减慢鼠标移动速度',exact:true}),faster=p.getByRole('button',{name:'加快鼠标移动速度',exact:true});
+  await slower.click();await until(()=>t.state.config.tuning.mouse_speed===1.2,'decrement 0.05');
+  await faster.click();await until(()=>t.state.config.tuning.mouse_speed===1.25,'increment 0.05');
+  await homeSpeed.fill('0.25');assert.equal(await slower.isDisabled(),true);
+  await homeSpeed.fill('4');assert.equal(await faster.isDisabled(),true);
+  await homeSpeed.fill('1.25');await until(()=>t.state.config.tuning.mouse_speed===1.25,'restore local speed');
   await capture(t,`home-mouse-${width}-${theme}-FIXTURE`);
   await p.getByRole('button',{name:'放大',exact:true}).click();const zoom=await p.getByLabel('画布缩放').innerText();
   t.state.config.links[0].from.start=.1;await wait(800);assert.equal(await p.getByLabel('画布缩放').innerText(),zoom);
@@ -96,6 +127,7 @@ try {
   await t.ctx.close();
  }
 
+ if(!before){
  const paused=await setup();const p=paused.page;
  await nav(paused,'设置');await p.getByRole('button',{name:'输入与快捷键',exact:true}).click();
  const slider=p.getByRole('slider',{name:'远端鼠标速度'});
@@ -114,6 +146,7 @@ try {
  assert.equal(paused.commands.at(-1).command,'quit_app');
  report.checks.push('pause preempts saving without restoring sharing or losing a newer edit; quit flushes queued edits');
  await paused.ctx.close();
+ }
  assert.deepEqual(report.errors,[]);console.log('PASS rendered autosave, delayed receipts, focus, remote sync, failure/retry, validation and drag (fixtures)');
  fs.writeFileSync(path.join(out,'report.json'),JSON.stringify(report,null,2));
 } finally {await browser.close();server.close();}

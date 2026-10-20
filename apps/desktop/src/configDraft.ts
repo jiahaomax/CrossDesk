@@ -1,4 +1,5 @@
 import type {Config} from './types';
+import {shortcutError} from './switchShortcut.ts';
 
 // Sharing is live state, never part of an editable configuration draft.
 const fields = ['port', 'same_subnet_only', 'endpoints', 'links', 'tuning', 'appearance'] as const;
@@ -42,7 +43,8 @@ export function pairingAddressError(raw: string): string | null {
 export function validateConfig(config: Config): string | null {
   if (!Number.isInteger(config.port) || config.port < 1024 || config.port > 65534) return '监听端口应为 1024–65534 的整数，下一端口用于配对。';
   const t = config.tuning;
-  if (t && (!Number.isFinite(t.mouse_speed) || t.mouse_speed < .25 || t.mouse_speed > 4 || !['Ctrl','Shift','None'].includes(t.switch_modifier) || ![125,250,500].includes(t.mouse_hz) || ![41,69].includes(t.emergency_key) ||
+  if(t){const problem=shortcutError(t.switch_modifier,t.emergency_key);if(problem)return problem;}
+  if (t && (!Number.isFinite(t.mouse_speed) || t.mouse_speed < .25 || t.mouse_speed > 4 || ![125,250,500].includes(t.mouse_hz) || ![41,69].includes(t.emergency_key) ||
     ![[t.motion_wait_ms,0,20],[t.edge_wait_ms,0,300],[t.heartbeat_ms,50,200],[t.lease_ms,500,2000]].every(([n,min,max]) => Number.isInteger(n) && n >= min && n <= max)))
     return '请检查鼠标速度、跨机按键和输入参数，数值需在标注范围内。';
   if (config.endpoints.length > 8) return '最多支持 8 个对方地址。';

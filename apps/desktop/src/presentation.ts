@@ -1,4 +1,5 @@
 import type { Status } from './types';
+import {shortcutLabel} from './switchShortcut.ts';
 export type Platform = 'windows' | 'macos' | 'ubuntu';
 export function detectPlatform(): Platform {
   const platform = navigator.platform.toLowerCase();
@@ -30,5 +31,5 @@ export function errorSummary(raw: string) {
 
 export function switchingLabel(s: Status | null) {
   const key=s?.config.tuning?.switch_modifier;
-  return key==='None'?'直接移向边缘':key==='Shift'?'Shift + 屏幕边缘':key==='Ctrl'?'Ctrl + 屏幕边缘':'待读取切换按键';
+  return key==='None'?'直接移向边缘':key?`${shortcutLabel(key)} + 屏幕边缘`:'待读取切换按键';
 }

@@ -149,17 +149,29 @@ try {
   await until(b,s=>s.config.links.length===0&&s.effective_links.length===2,'restore defaults synchronized to receiver');
   console.log('PASS visual placement uses real screen IDs: reciprocal top/bottom routes acknowledged, persisted and applied; defaults restored with zero input');
   await cmd(a,'configure',{config:{...a.status.config,same_subnet_only:false,tuning:{...a.status.config.tuning,mouse_speed:2,switch_modifier:'Shift'},appearance:{dark:true,debug_info:true}}});
-  await until(b,s=>s.config.same_subnet_only===false&&s.config.tuning.mouse_speed===2&&s.config.tuning.switch_modifier==='Shift'&&s.config.appearance.dark===true,'A settings synchronized to B');
+  await until(b,s=>s.config.same_subnet_only===false&&s.config.tuning.switch_modifier==='Shift'&&s.config.appearance.dark===true,'A shared settings synchronized to B');
+  assert.equal(b.status.config.tuning.mouse_speed,1,'B keeps its local mouse speed');
   assert.equal(b.status.config.port,pb,'sync preserves local port');
   await cmd(b,'configure',{config:{...b.status.config,same_subnet_only:true,tuning:{...b.status.config.tuning,mouse_speed:1.5,switch_modifier:'None'},appearance:{dark:false,debug_info:false}}});
-  await until(a,s=>s.config.same_subnet_only===true&&s.config.tuning.mouse_speed===1.5&&s.config.tuning.switch_modifier==='None'&&s.config.appearance.dark===false,'B settings synchronized to A');
+  await until(a,s=>s.config.same_subnet_only===true&&s.config.tuning.switch_modifier==='None'&&s.config.appearance.dark===false,'B shared settings synchronized to A');
+  assert.equal(a.status.config.tuning.mouse_speed,2,'A keeps its local mouse speed');
   assert.equal(a.status.config.port,pa);
   for(const [name,d] of [['a',a],['b',b]]) {
     const saved=JSON.parse(fs.readFileSync(path.join(root,name,dataDirectory,'config.json'),'utf8'));
-    assert.equal(saved.tuning.mouse_speed,1.5);assert.equal(saved.tuning.switch_modifier,'None');
+    assert.equal(saved.tuning.mouse_speed,name==='a'?2:1.5);assert.equal(saved.tuning.switch_modifier,'None');
+    assert.equal(saved.shared_settings.tuning.mouse_speed,undefined,'local speed is absent from the shared payload');
     assert.equal(saved.appearance.debug_info,false);assert.equal(d.status.received,0);
   }
-  console.log('PASS bidirectional input/appearance settings sync, immediate applied values, local ports preserved and persistence, zero input');
+  console.log('PASS shared input/appearance preferences converge; different local mouse speeds and ports persist independently, zero input');
+  const chord={Keys:[224,225,14]};
+  await cmd(a,'configure',{config:{...a.status.config,tuning:{...a.status.config.tuning,switch_modifier:chord}}});
+  await until(b,s=>JSON.stringify(s.config.tuning.switch_modifier)===JSON.stringify(chord),'custom chord synchronizes');
+  assert.equal(b.status.config.tuning.mouse_speed,1.5);
+  const beforeChord=a.status.config;
+  await assert.rejects(()=>cmd(a,'configure',{config:{...beforeChord,tuning:{...beforeChord.tuning,switch_modifier:{Keys:[224,226,41]}}}}));
+  assert.deepEqual(a.status.config,beforeChord,'invalid chord cannot overwrite configuration');
+  await cmd(a,'configure',{config:{...a.status.config,tuning:{...a.status.config.tuning,switch_modifier:'None'}}});
+  await until(b,s=>s.config.tuning.switch_modifier==='None','no-key mode restored');
   if(process.argv.includes('--autosave-ui')) {
     const {checkAutosave}=await import('./check-autosave-native-browser.mjs');
     await checkAutosave(a,b);
@@ -222,7 +234,9 @@ try {
   assert.equal(b.status.connection_issues?.[a.status.identity],undefined);
   assert.equal(a.status.last_error,null);assert.equal(b.status.last_error,null);
   assert.equal(b.status.received,0);assert.equal(b.status.observe_only,true);
-  for(const d of [a,b]) {assert.equal(d.status.config.tuning.mouse_speed,1.5);assert.equal(d.status.config.tuning.switch_modifier,'None');}
+  assert.equal(a.status.config.tuning.mouse_speed,process.argv.includes('--autosave-ui')?2.3:2);
+  assert.equal(b.status.config.tuning.mouse_speed,1.5);
+  for(const d of [a,b])assert.equal(d.status.config.tuning.switch_modifier,'None');
   console.log('PASS restart automatically reconnects both peers using saved trust and addresses; no old input replay');
   if(process.argv.includes('--expiry')) {
     await cmd(b,'pair_open');

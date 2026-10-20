@@ -664,7 +664,7 @@ fn unmatched_remote_release_is_rejected() {
 fn shift_and_no_modifier_switching_consume_only_the_configured_key() {
     for modifier in [SwitchModifier::Shift, SwitchModifier::None] {
         let mut s = ControlSession::new("A".into(), layout()).unwrap();
-        s.tuning.switch_modifier = modifier;
+        s.tuning.switch_modifier = modifier.clone();
         let shift = PhysicalKey(0xe1);
         if modifier == SwitchModifier::Shift {
             key(&mut s, PhysicalKey::LEFT_CTRL, true);
@@ -717,6 +717,92 @@ fn no_modifier_still_requires_motion_and_does_not_cross_during_drag_or_typing() 
     switch(&mut s, "C", 200);
     switch(&mut s, "A", 400);
     assert_eq!(s.phase, Phase::LocalActive);
+}
+#[test]
+fn custom_chord_requires_all_keys_and_consumes_each_release_independently() {
+    let ctrl = PhysicalKey::RIGHT_CTRL;
+    let letter = PhysicalKey(0x0e); // K
+    let mut s = ControlSession::new("A".into(), layout()).unwrap();
+    s.tuning.switch_modifier = SwitchModifier::Keys(vec![PhysicalKey::LEFT_CTRL, letter]);
+    key(&mut s, ctrl, true);
+    assert!(s
+        .motion(Point { x: 999., y: 50. }, Point { x: 2., y: 0. }, 0)
+        .actions
+        .is_empty());
+    key(&mut s, letter, true);
+    key(&mut s, PhysicalKey(4), true);
+    assert!(s
+        .motion(Point { x: 999., y: 50. }, Point { x: 2., y: 0. }, 0)
+        .actions
+        .is_empty());
+    key(&mut s, PhysicalKey(4), false);
+    switch(&mut s, "B", 1);
+    assert!(key(&mut s, ctrl, false).actions.is_empty());
+    // Keep the full trigger consumed until every physical trigger key is released.
+    assert!(key(&mut s, ctrl, true).actions.is_empty());
+    assert!(key(&mut s, letter, true).actions.is_empty()); // repeat of consumed key
+    assert!(key(&mut s, letter, false).actions.is_empty());
+    assert!(key(&mut s, ctrl, false).actions.is_empty());
+    assert_eq!(key(&mut s, ctrl, true).actions.len(), 1);
+    assert_eq!(key(&mut s, ctrl, false).actions.len(), 1);
+    assert_eq!(key(&mut s, letter, true).actions.len(), 1);
+    assert_eq!(key(&mut s, letter, false).actions.len(), 1);
+}
+#[test]
+fn single_regular_key_and_partial_release_during_prepare_do_not_leak_key_ups() {
+    for keys in [
+        vec![PhysicalKey(0x41)],
+        vec![PhysicalKey(0xe2), PhysicalKey(0x0e)],
+    ] {
+        let mut s = ControlSession::new("A".into(), layout()).unwrap();
+        s.tuning.switch_modifier = SwitchModifier::Keys(keys.clone());
+        for key_code in &keys {
+            key(&mut s, *key_code, true);
+        }
+        let motion = s.motion(Point { x: 999., y: 50. }, Point { x: 2., y: 0. }, 0);
+        assert!(matches!(
+            motion.actions.first(),
+            Some(Action::Prepare { .. })
+        ));
+        if keys.len() > 1 {
+            key(&mut s, keys[0], false);
+        }
+        s.prepared("B", s.epoch, 1);
+        assert_eq!(s.active, "B");
+        assert!(key(&mut s, *keys.last().unwrap(), false).actions.is_empty());
+        assert_eq!(key(&mut s, *keys.last().unwrap(), true).actions.len(), 1);
+    }
+}
+#[test]
+fn invalid_chords_and_emergency_conflicts_are_rejected() {
+    for keys in [
+        vec![],
+        vec![0],
+        vec![224, 228],
+        vec![4, 4],
+        vec![300],
+        vec![224, 226, 41],
+        vec![4, 5, 6, 7, 8, 9, 10],
+    ] {
+        let tuning = Tuning {
+            switch_modifier: SwitchModifier::Keys(keys.into_iter().map(PhysicalKey).collect()),
+            ..Default::default()
+        };
+        assert!(tuning.validate().is_err());
+    }
+    for keys in [
+        vec![224, 225],
+        vec![226],
+        vec![227, 14],
+        vec![65],
+        vec![4, 5],
+    ] {
+        let tuning = Tuning {
+            switch_modifier: SwitchModifier::Keys(keys.into_iter().map(PhysicalKey).collect()),
+            ..Default::default()
+        };
+        assert!(tuning.validate().is_ok());
+    }
 }
 #[test]
 fn remote_speed_multiplies_delta_without_changing_local_cursor_or_dropping_fractions() {

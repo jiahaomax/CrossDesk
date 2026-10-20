@@ -38,6 +38,7 @@ export type EdgeLink = {
   enabled: boolean;
   require_ctrl: boolean;
 };
+export type SwitchShortcut = 'Ctrl' | 'Shift' | 'None' | {Keys: number[]};
 export type Config = {
   sharing?: boolean;
   same_subnet_only?: boolean;
@@ -49,7 +50,7 @@ export type Config = {
   tuning?: {
     mouse_hz: number;
     mouse_speed: number;
-    switch_modifier: 'Ctrl' | 'Shift' | 'None';
+    switch_modifier: SwitchShortcut;
     motion_wait_ms: number;
     edge_wait_ms: number;
     heartbeat_ms: number;

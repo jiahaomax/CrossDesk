@@ -3,9 +3,9 @@ use crossdesk_core::*;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 pub const VERSION: u16 = if crossdesk_core::profile::IS_TEST {
-    0x8004
+    0x8005
 } else {
-    4
+    5
 };
 pub const MAX_FRAME: usize = 65536;
 /// Only the authenticated pair's routes are exchanged, never third-party settings.
@@ -20,7 +20,7 @@ pub struct PairLayout {
 pub struct SharedSettings {
     pub revision: u64,
     pub author: DeviceId,
-    pub tuning: Tuning,
+    pub tuning: SharedTuning,
     pub same_subnet_only: bool,
     pub appearance: Appearance,
 }

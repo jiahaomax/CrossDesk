@@ -156,8 +156,12 @@ async fn establish<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         bail!("对方协议不兼容，请更新两端程序");
     };
     ensure!(
-        version == VERSION && source == peer.id && topology.device.id == peer.id,
-        "对方版本或身份不匹配，请将两端都更新到相同候选版本（rc13 或更新）"
+        version == VERSION,
+        "连接版本不同，请将两台电脑都更新到相同候选版本"
+    );
+    ensure!(
+        source == peer.id && topology.device.id == peer.id,
+        "对方身份与已保存的配对不匹配"
     );
     topology.device.online = true;
     topology.device.authorized = true;
