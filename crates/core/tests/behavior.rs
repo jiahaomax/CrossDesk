@@ -235,6 +235,47 @@ fn merely_landing_on_edge_is_not_crossing() {
         .is_some());
 }
 #[test]
+fn mac_fractional_right_and_bottom_edges_can_start_a_switch() {
+    for edge in [Edge::Right, Edge::Bottom] {
+        for scale in [1., 1.25, 2.] {
+            let mut l = layout();
+            let m = &mut l.topologies[2].monitors[0];
+            m.unit = CoordinateUnit::DesktopPoints;
+            m.scale = scale;
+            m.rect.x = -1000.;
+            m.rect.y = -500.;
+            let link = l.links.iter_mut().find(|l| l.from.device == "C").unwrap();
+            link.from.edge = edge;
+            let (p, delta) = match edge {
+                Edge::Right => (Point { x: -0.5, y: 0. }, Point { x: 2., y: 0. }),
+                _ => (Point { x: -500., y: 499.5 }, Point { x: 0., y: 2. }),
+            };
+            let mut s = ControlSession::new("C".into(), l).unwrap();
+            assert!(s.motion(p, delta, 0).actions.is_empty());
+            key(&mut s, PhysicalKey::LEFT_CTRL, true);
+            assert!(s.motion(p, Point::default(), 1).actions.is_empty());
+            assert!(s
+                .motion(
+                    p,
+                    Point {
+                        x: -delta.x,
+                        y: -delta.y
+                    },
+                    2
+                )
+                .actions
+                .is_empty());
+            let d = s.motion(p, delta, 3);
+            assert!(
+                matches!(d.actions.first(), Some(Action::Prepare { target, .. }) if target == "A"),
+                "Mac {edge:?} at {p:?}, scale {scale}: {:?}",
+                d.actions
+            );
+            assert!(d.suppress);
+        }
+    }
+}
+#[test]
 fn ctrl_lifecycle_and_mac_click() {
     let mut s = ControlSession::new("A".into(), layout()).unwrap();
     assert!(!key(&mut s, PhysicalKey::LEFT_CTRL, true).suppress);

@@ -1,5 +1,6 @@
 //! macOS CI builds pass on arm64 and x86_64; physical native input acceptance is pending.
 //! Quartz coordinates are global desktop points; backing pixels remain a separate field.
+use crate::macos_input::{ModifierState, MouseEvent, MouseState};
 use crate::{InputPermissions, NativeEvent};
 use anyhow::{bail, Context, Result};
 use crossdesk_core::*;
@@ -9,7 +10,7 @@ use std::{
     ptr::{null, null_mut},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex, OnceLock,
     },
 };
 type CFRef = *const c_void;
@@ -55,6 +56,7 @@ extern "C" {
     fn CGEventCreateMouseEvent(source: CFRef, kind: u32, point: CGPoint, button: u32) -> Event;
     fn CGEventCreateScrollWheelEvent(source: CFRef, units: u32, count: u32, ...) -> Event;
     fn CGEventSetIntegerValueField(event: Event, field: u32, value: i64);
+    fn CGEventSetDoubleValueField(event: Event, field: u32, value: f64);
     fn CGEventGetIntegerValueField(event: Event, field: u32) -> i64;
     fn CGEventGetFlags(event: Event) -> u64;
     fn CGEventSourceKeyState(state: u32, key: u16) -> bool;
@@ -334,12 +336,43 @@ const KEYS: &[(u16, u16)] = &[
     (125, 81),
     (126, 82),
 ];
+// All posts in a guardian are serialized. Keep only the inputs this process
+// posted, never infer a remote drag from another physical mouse's global state.
+static POSTED_MOUSE: OnceLock<Mutex<MouseState>> = OnceLock::new();
+
+unsafe fn create_mouse_event(event: MouseEvent) -> Event {
+    let native = CGEventCreateMouseEvent(
+        null(),
+        event.kind,
+        CGPoint {
+            x: event.position.x,
+            y: event.position.y,
+        },
+        event.button,
+    );
+    if !native.is_null() {
+        CGEventSetIntegerValueField(native, 0, event.number); // mouse event number
+        CGEventSetIntegerValueField(native, 1, i64::from(event.kind != 5)); // click state
+        CGEventSetDoubleValueField(native, 2, if event.pressed { 1. } else { 0. });
+        CGEventSetDoubleValueField(native, 4, event.delta.x);
+        CGEventSetDoubleValueField(native, 5, event.delta.y);
+    }
+    native
+}
+
 pub fn inject(event: &InputEvent) -> Result<()> {
     // An Accessibility grant includes event posting even when the separate
     // PostEvent preflight has no grant of its own. Keep the native OS check.
     if !unsafe { AXIsProcessTrusted() || CGPreflightPostEventAccess() } {
         bail!("当前键鼠后台尚未取得辅助功能权限");
     }
+    let mut posted = POSTED_MOUSE
+        .get_or_init(|| Mutex::new(MouseState::default()))
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Quartz input state unavailable"))?;
+    // Commit only after successful creation/post; failed events must not leave
+    // a held button in the next event's state.
+    let mut next_mouse = posted.clone();
     unsafe {
         let native = match event {
             InputEvent::Key { key, down, .. } => {
@@ -350,27 +383,17 @@ pub fn inject(event: &InputEvent) -> Result<()> {
                     .0;
                 CGEventCreateKeyboardEvent(null(), code, *down)
             }
-            InputEvent::Move { position, .. } => CGEventCreateMouseEvent(
-                null(),
-                5,
-                CGPoint {
-                    x: position.x,
-                    y: position.y,
-                },
-                0,
-            ),
+            InputEvent::Move { position, .. } => create_mouse_event(next_mouse.motion(*position)),
             InputEvent::Button { button, down } => {
-                let p = cursor()?;
-                let (kind, button) = match (*button, *down) {
-                    (1, true) => (1, 0),
-                    (1, false) => (2, 0),
-                    (2, true) => (3, 1),
-                    (2, false) => (4, 1),
-                    (3..=5, true) => (25, (*button - 1) as u32),
-                    (3..=5, false) => (26, (*button - 1) as u32),
-                    _ => bail!("unknown mouse button"),
+                let p = match next_mouse.position {
+                    Some(p) => p,
+                    None => cursor()?,
                 };
-                CGEventCreateMouseEvent(null(), kind, CGPoint { x: p.x, y: p.y }, button)
+                create_mouse_event(
+                    next_mouse
+                        .button(*button, *down, p)
+                        .context("unknown mouse button")?,
+                )
             }
             InputEvent::Wheel { horizontal, delta } => {
                 if *horizontal {
@@ -387,6 +410,7 @@ pub fn inject(event: &InputEvent) -> Result<()> {
         CGEventPost(0, native);
         CFRelease(native);
     }
+    *posted = next_mouse;
     // Quartz posting has no success return; real delivery must be verified on the Mac.
     Ok(())
 }
@@ -394,6 +418,7 @@ type Handler = Box<dyn FnMut(NativeEvent) -> bool + Send>;
 struct TapContext {
     handler: Handler,
     disabled: bool,
+    modifiers: ModifierState,
 }
 unsafe extern "C" fn event_callback(
     _: *mut c_void,
@@ -415,20 +440,10 @@ unsafe extern "C" fn event_callback(
             let code = CGEventGetIntegerValueField(event, 9) as u16;
             if let Some((_, hid)) = KEYS.iter().find(|(k, _)| *k == code) {
                 let down = if kind == 12 {
-                    let flags = CGEventGetFlags(event);
-                    let mask = match code {
-                        59 => 1,
-                        62 => 0x2000,
-                        56 => 2,
-                        60 => 4,
-                        58 => 0x20,
-                        61 => 0x40,
-                        55 => 8,
-                        54 => 0x10,
-                        57 => 1 << 16,
-                        _ => 0,
-                    };
-                    flags & mask != 0
+                    context
+                        .modifiers
+                        .changed(code, CGEventGetFlags(event))
+                        .unwrap_or(false)
                 } else {
                     kind == 10
                 };
@@ -486,7 +501,13 @@ pub fn capture(handler: Handler, stop: Arc<AtomicBool>) -> Result<()> {
         let mut context = Box::new(TapContext {
             handler,
             disabled: false,
+            modifiers: ModifierState::default(),
         });
+        for code in [54, 55, 56, 57, 58, 59, 60, 61, 62] {
+            if CGEventSourceKeyState(1, code) {
+                context.modifiers.seed(code);
+            }
+        }
         let mask = [1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 22, 25, 26, 27]
             .iter()
             .fold(0u64, |m, i| m | (1 << i));
@@ -545,4 +566,84 @@ pub fn unprotect(reference: &[u8]) -> Result<Vec<u8>> {
 pub fn atomic_replace(from: &Path, to: &Path) -> Result<()> {
     std::fs::rename(from, to)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    extern "C" {
+        fn CGEventGetType(event: Event) -> u32;
+        fn CGEventGetDoubleValueField(event: Event, field: u32) -> f64;
+        fn CGEventSetFlags(event: Event, flags: u64);
+    }
+
+    // Create and inspect Quartz objects only. No event tap, CGEventPost,
+    // permission prompt or input is sent to the CI desktop.
+    #[test]
+    fn quartz_drag_objects_have_type_button_delta_pressure_and_matching_number() {
+        unsafe {
+            for (button, kind) in [(1, 6), (2, 7), (3, 27), (4, 27), (5, 27)] {
+                let mut state = MouseState::default();
+                let down = state
+                    .button(button, true, Point { x: -100., y: 20. })
+                    .unwrap();
+                let drag = state.motion(Point { x: -91., y: 25. });
+                let up = state.button(button, false, Point::default()).unwrap();
+                for expected in [down, drag, up] {
+                    let e = create_mouse_event(expected);
+                    assert!(!e.is_null());
+                    assert_eq!(CGEventGetType(e), expected.kind);
+                    assert_eq!(CGEventGetIntegerValueField(e, 3), i64::from(button - 1));
+                    assert_eq!(CGEventGetIntegerValueField(e, 0), down.number);
+                    assert_eq!(CGEventGetIntegerValueField(e, 1), 1);
+                    assert_eq!(
+                        CGEventGetDoubleValueField(e, 2),
+                        if expected.pressed { 1. } else { 0. }
+                    );
+                    assert_eq!(CGEventGetLocation(e).x, expected.position.x);
+                    CFRelease(e);
+                }
+                let e = create_mouse_event(drag);
+                assert_eq!(CGEventGetType(e), kind);
+                assert_eq!(CGEventGetDoubleValueField(e, 4), 9.);
+                assert_eq!(CGEventGetDoubleValueField(e, 5), 5.);
+                CFRelease(e);
+                assert_eq!(state.motion(Point::default()).kind, 5);
+            }
+        }
+    }
+
+    #[test]
+    fn quartz_callback_decodes_public_control_flags_and_ignores_own_injection() {
+        let received = Arc::new(Mutex::new(vec![]));
+        let output = received.clone();
+        let mut context = TapContext {
+            handler: Box::new(move |e| {
+                output.lock().unwrap().push(e);
+                false
+            }),
+            disabled: false,
+            modifiers: ModifierState::default(),
+        };
+        unsafe {
+            let e = CGEventCreateKeyboardEvent(null(), 59, true);
+            assert!(!e.is_null());
+            CGEventSetFlags(e, 1 << 18);
+            event_callback(null_mut(), 12, e, &mut context as *mut _ as _);
+            CGEventSetIntegerValueField(e, 42, crate::INJECTION_TAG as i64);
+            CGEventSetFlags(e, 0);
+            event_callback(null_mut(), 12, e, &mut context as *mut _ as _);
+            CGEventSetIntegerValueField(e, 42, 0);
+            event_callback(null_mut(), 12, e, &mut context as *mut _ as _);
+            CFRelease(e);
+        }
+        let events = received.lock().unwrap();
+        assert_eq!(events.len(), 2);
+        for (event, expected) in events.iter().zip([true, false]) {
+            assert!(
+                matches!(event, NativeEvent::Input(InputEvent::Key { key, down, .. })
+                if *key == PhysicalKey::LEFT_CTRL && *down == expected)
+            );
+        }
+    }
 }

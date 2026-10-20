@@ -231,9 +231,12 @@ impl Layout {
             }
             let t = match l.from.edge {
                 Edge::Left if delta.x < 0. => (r.x - from.x) / delta.x,
-                Edge::Right if delta.x > 0. => (r.x + r.width - 1. - from.x) / delta.x,
+                // Quartz positions are fractional desktop points. A cursor in
+                // the last point (e.g. width - 0.5 on Retina) is already at the
+                // edge, not a negative-time intersection to discard.
+                Edge::Right if delta.x > 0. => ((r.x + r.width - 1. - from.x) / delta.x).max(0.),
                 Edge::Top if delta.y < 0. => (r.y - from.y) / delta.y,
-                Edge::Bottom if delta.y > 0. => (r.y + r.height - 1. - from.y) / delta.y,
+                Edge::Bottom if delta.y > 0. => ((r.y + r.height - 1. - from.y) / delta.y).max(0.),
                 _ => continue,
             };
             if !(0. ..1.).contains(&t) {

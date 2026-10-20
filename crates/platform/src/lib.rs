@@ -108,6 +108,8 @@ pub enum NativeEvent {
 }
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(any(target_os = "macos", test))]
+mod macos_input;
 #[cfg(windows)]
 pub mod windows;
 #[cfg(target_os = "macos")]
