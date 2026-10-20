@@ -536,6 +536,30 @@ impl Manager {
         self.publish();
         Ok(())
     }
+    // Local input can stop the native worker between the manager tick, enqueue,
+    // and acknowledgement. Treat that as a normal handoff in all three places.
+    fn receiver_result<T>(&mut self, result: Result<T>) -> Result<Option<T>> {
+        if self
+            .receiver
+            .as_ref()
+            .is_some_and(|n| n.interrupted.load(Ordering::Acquire))
+        {
+            self.cancel()?;
+            Ok(None)
+        } else {
+            result.map(Some)
+        }
+    }
+    fn receiver_command(&mut self, command: ReceiverCommand) -> Result<bool> {
+        let result = self
+            .receiver
+            .as_ref()
+            .context("接收后台已停止")?
+            .tx
+            .try_send(command)
+            .map_err(|_| anyhow::anyhow!("接收队列不可用"));
+        Ok(self.receiver_result(result)?.is_some())
+    }
     fn remember_cancelled(&mut self, claim: &Claim, effects: &[Effect]) {
         for peer in effects.iter().filter_map(|e| match e {
             Effect::Cancel(peer, _) => Some(peer),
@@ -647,6 +671,7 @@ impl Manager {
         Ok(())
     }
     async fn message(&mut self, id: &str, queued: Instant, m: Message) -> Result<()> {
+        self.receiver_result(Ok(()))?;
         if self
             .cancelled
             .get(id)
@@ -800,19 +825,24 @@ impl Manager {
                             && m.rect.contains(position)),
                     "无效目标位置"
                 );
-                let n = self.receiver.as_ref().context("接收后台未启动")?;
                 let (reply, done) = tokio::sync::oneshot::channel();
-                n.tx.try_send(ReceiverCommand::Activate {
+                if !self.receiver_command(ReceiverCommand::Activate {
                     source: id.into(),
                     session: self.ownership.claim().unwrap().nonce,
                     epoch,
                     position,
                     reply,
-                })
-                .map_err(|_| anyhow::anyhow!("接收队列繁忙"))?;
-                timeout(Duration::from_millis(200), done)
+                })? {
+                    return Ok(());
+                }
+                let result = timeout(Duration::from_millis(200), done)
                     .await
-                    .context("激活远端输入超时，已释放控制")???;
+                    .context("激活远端输入超时，已释放控制")
+                    .and_then(|r| r.context("激活确认已结束"))
+                    .and_then(|r| r);
+                if self.receiver_result(result)?.is_none() {
+                    return Ok(());
+                }
                 self.incoming_epoch = Some(epoch);
                 self.prepared_epoch = None;
                 self.send(id, Message::Activated { epoch })?;
@@ -827,13 +857,9 @@ impl Manager {
                         && self.incoming_epoch == Some(packet.epoch),
                     "未授权或过期的输入"
                 );
-                self.receiver
-                    .as_ref()
-                    .context("接收后台已停止")?
-                    .tx
-                    .try_send(ReceiverCommand::Input(queued, packet))
-                    .map_err(|_| anyhow::anyhow!("接收队列已满"))?;
-                update(&self.status, |s| s.received += 1);
+                if self.receiver_command(ReceiverCommand::Input(queued, packet))? {
+                    update(&self.status, |s| s.received += 1);
+                }
             }
             Message::Release { epoch } => {
                 ensure!(
@@ -841,13 +867,19 @@ impl Manager {
                         && release_matches(epoch, self.incoming_epoch, self.prepared_epoch),
                     "释放请求与控制者或控制代际不符"
                 );
-                if let Some(n) = &self.receiver {
+                if self.receiver.is_some() {
                     let (reply, done) = tokio::sync::oneshot::channel();
-                    n.tx.try_send(ReceiverCommand::Release(reply))
-                        .map_err(|_| anyhow::anyhow!("释放队列已满"))?;
-                    timeout(Duration::from_millis(200), done)
+                    if !self.receiver_command(ReceiverCommand::Release(reply))? {
+                        return Ok(());
+                    }
+                    let result = timeout(Duration::from_millis(200), done)
                         .await
-                        .context("释放输入超时")???;
+                        .context("释放输入超时")
+                        .and_then(|r| r.context("释放确认已结束"))
+                        .and_then(|r| r);
+                    if self.receiver_result(result)?.is_none() {
+                        return Ok(());
+                    }
                 }
                 self.receiver.take();
                 self.incoming_epoch = None;
@@ -877,15 +909,14 @@ impl Manager {
                 );
                 if self.incoming_epoch == Some(epoch)
                     && self.ownership.claim().is_some_and(|c| c.origin == id)
+                    && self.receiver.is_some()
+                    && !self.receiver_command(ReceiverCommand::Heartbeat(
+                        id.into(),
+                        self.ownership.claim().unwrap().nonce,
+                        epoch,
+                    ))?
                 {
-                    if let Some(n) = &self.receiver {
-                        n.tx.try_send(ReceiverCommand::Heartbeat(
-                            id.into(),
-                            self.ownership.claim().unwrap().nonce,
-                            epoch,
-                        ))
-                        .map_err(|_| anyhow::anyhow!("心跳队列已满"))?;
-                    }
+                    return Ok(());
                 }
                 self.send(
                     id,
@@ -1308,6 +1339,74 @@ mod tests {
             },
             sent,
         )
+    }
+    #[tokio::test]
+    async fn takeover_during_native_command_or_ack_is_not_a_connection_failure() {
+        for command_stage in [true, false] {
+            let (mut manager, _sent) = test_manager();
+            let claim = Claim {
+                origin: "A".into(),
+                nonce: 42,
+            };
+            manager
+                .ownership
+                .request("A", claim, manager.neighbors(), 0);
+            manager.incoming_epoch = Some(3);
+            manager.receiver = Some(interrupted_receiver_for_test());
+            if command_stage {
+                let (reply, _) = tokio::sync::oneshot::channel();
+                assert!(!manager
+                    .receiver_command(ReceiverCommand::Release(reply))
+                    .unwrap());
+            } else {
+                // Models an outstanding Activate/Release reply being dropped
+                // after physical movement has interrupted the native worker.
+                assert!(manager
+                    .receiver_result::<()>(Err(anyhow::anyhow!("reply closed")))
+                    .unwrap()
+                    .is_none());
+            }
+            assert!(manager.ownership.claim().is_none());
+            assert!(manager.receiver.is_none());
+            assert!(manager.peers.contains_key("A"));
+            assert!(manager.config.sharing);
+            assert!(manager
+                .receiver_result::<()>(Err(anyhow::anyhow!("unrelated error")))
+                .is_err());
+        }
+    }
+    #[tokio::test]
+    async fn local_takeover_before_network_tick_keeps_connection() {
+        let (mut manager, _sent) = test_manager();
+        let claim = Claim {
+            origin: "A".into(),
+            nonce: 42,
+        };
+        manager
+            .ownership
+            .request("A", claim, manager.neighbors(), 0);
+        manager.incoming_epoch = Some(3);
+        // The native worker has observed local movement and closed its queue,
+        // but the 50 ms manager tick has not run yet. No OS hooks in this test.
+        manager.receiver = Some(interrupted_receiver_for_test());
+        let packet = InputPacket {
+            source: "A".into(),
+            session: 42,
+            epoch: 3,
+            sequence: 7,
+            event: InputEvent::Move {
+                position: Point { x: 100., y: 100. },
+                topology_version: 1,
+            },
+        };
+        manager
+            .message("A", Instant::now(), Message::Input(packet))
+            .await
+            .unwrap();
+        assert!(manager.peers.contains_key("A"));
+        assert!(manager.config.sharing);
+        assert_eq!(manager.status.lock().unwrap().received, 0);
+        assert!(manager.ownership.claim().is_none());
     }
     #[tokio::test]
     async fn local_takeover_drains_old_input_without_losing_peer_connection() {

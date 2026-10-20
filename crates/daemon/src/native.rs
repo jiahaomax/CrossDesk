@@ -256,6 +256,18 @@ impl Drop for ReceiverHandle {
         }
     }
 }
+#[cfg(test)]
+pub fn interrupted_receiver_for_test() -> ReceiverHandle {
+    let (tx, _) = mpsc::sync_channel(1);
+    ReceiverHandle {
+        tx,
+        ready: Arc::new(AtomicBool::new(true)),
+        interrupted: Arc::new(AtomicBool::new(true)),
+        stop: Arc::new(AtomicBool::new(false)),
+        join: None,
+        capture_join: None,
+    }
+}
 // Native adapters already exclude injected events. A physical mouse movement
 // takes over locally immediately; it must never be forwarded to the old source.
 // Keys/buttons remain blocked only until the worker releases its remote ledger.
