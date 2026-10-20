@@ -100,6 +100,69 @@ fn switch(s: &mut ControlSession, to: &str, now: u64) -> Vec<Action> {
     s.prepared(to, s.epoch, now + 1)
 }
 #[test]
+fn ctrl_win_voice_chord_is_remote_only_and_can_stay_held_with_heartbeats() {
+    let mut s = ControlSession::new("A".into(), layout()).unwrap();
+    key(&mut s, PhysicalKey::LEFT_CTRL, true);
+    switch(&mut s, "B", 10);
+    // Finish the crossing gesture before starting a separate voice shortcut.
+    key(&mut s, PhysicalKey::LEFT_CTRL, false);
+    let mut receiver = Receiver::default();
+    receiver.activate("A".into(), 42, s.epoch, 20).unwrap();
+    let ctrl = PhysicalKey::LEFT_CTRL;
+    let win = PhysicalKey(0xe3);
+    for (sequence, (key_code, down, now)) in [
+        (ctrl, true, 21),
+        (win, true, 22),
+        (win, false, 60021),
+        (ctrl, false, 60022),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if !down && sequence == 2 {
+            for now in (100..=60000).step_by(100) {
+                assert!(s.tick(now).is_empty(), "held chord is not a switch timeout");
+                assert!(receiver.heartbeat("A", 42, s.epoch, now));
+                assert!(!receiver.expired(now));
+            }
+        }
+        let decision = key(&mut s, key_code, down);
+        assert!(
+            decision.suppress,
+            "no physical shortcut should reach the local window"
+        );
+        assert_eq!(decision.actions.len(), 1);
+        let Action::Deliver { target, event } = &decision.actions[0] else {
+            panic!("expected remote key")
+        };
+        assert_eq!(target, "B");
+        receiver
+            .validate(
+                &InputPacket {
+                    source: "A".into(),
+                    session: 42,
+                    epoch: s.epoch,
+                    sequence: sequence as u64 + 1,
+                    event: event.clone(),
+                },
+                now,
+                0,
+                1,
+            )
+            .unwrap();
+        receiver.committed(event);
+    }
+    assert!(
+        receiver.keys.is_empty(),
+        "both key releases must be delivered"
+    );
+    assert!(s.remote());
+    assert!(
+        receiver.expired(61000),
+        "a real lost heartbeat still releases control"
+    );
+}
+#[test]
 fn each_computer_has_local_mouse_and_can_initiate_remote_control() {
     // Both use the same physical arrangement. No fixed server/client roles.
     let mut l = layout();

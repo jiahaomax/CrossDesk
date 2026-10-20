@@ -2,7 +2,7 @@
 //! A logical revision plus author ID gives both ends the same winner, without clocks.
 use crate::config::Config;
 use anyhow::{ensure, Result};
-use crossdesk_core::{DeviceTopology, EdgeLink, Layout};
+use crossdesk_core::{DeviceTopology, Edge, EdgeEnd, EdgeLink, Layout, Monitor};
 use crossdesk_transport::PairLayout;
 
 fn belongs(link: &EdgeLink, local: &str, peer: &str) -> bool {
@@ -59,6 +59,101 @@ pub fn record_changes(
     Ok(())
 }
 
+// A saved route to an offline computer is still reserved, but cannot be
+// validated against a topology that has not arrived in this process yet.
+fn validate_present(topologies: &[DeviceTopology], links: &[EdgeLink]) -> Result<()> {
+    let present: Vec<_> = topologies
+        .iter()
+        .filter(|t| t.device.online)
+        .cloned()
+        .collect();
+    let known = |id: &str| present.iter().any(|t| t.device.id == id);
+    let links = links
+        .iter()
+        .filter(|l| known(&l.from.device) && known(&l.to.device))
+        .cloned()
+        .collect();
+    Layout {
+        topologies: present,
+        links,
+    }
+    .validate()
+    .map_err(anyhow::Error::msg)
+}
+
+fn fits(topologies: &[DeviceTopology], saved: &[EdgeLink], candidate: &[EdgeLink]) -> bool {
+    if candidate.iter().any(|a| {
+        saved.iter().any(|b| {
+            a.enabled
+                && b.enabled
+                && a.from.device == b.from.device
+                && a.from.monitor == b.from.monitor
+                && a.from.edge == b.from.edge
+                && a.from.start < b.from.end
+                && b.from.start < a.from.end
+        })
+    }) {
+        return false;
+    }
+    validate_present(topologies, &[saved, candidate].concat()).is_ok()
+}
+
+fn automatic_pair(topologies: &[DeviceTopology], local: &str, peer: &str) -> Vec<Vec<EdgeLink>> {
+    let mut pair: Vec<_> = topologies
+        .iter()
+        .filter(|t| t.device.id == local || t.device.id == peer)
+        .collect();
+    pair.sort_by_key(|t| &t.device.id);
+    if pair.len() != 2 {
+        return vec![];
+    }
+    let end = |t: &DeviceTopology, edge: Edge| -> Option<EdgeEnd> {
+        let score = |m: &Monitor| match edge {
+            Edge::Left => m.rect.x,
+            Edge::Right => -(m.rect.x + m.rect.width),
+            Edge::Top => m.rect.y,
+            Edge::Bottom => -(m.rect.y + m.rect.height),
+        };
+        let m = t
+            .monitors
+            .iter()
+            .filter(|m| m.enabled && m.mirror_of.is_none())
+            .min_by(|a, b| score(a).total_cmp(&score(b)).then(a.id.cmp(&b.id)))?;
+        Some(EdgeEnd {
+            device: t.device.id.clone(),
+            monitor: m.id.clone(),
+            edge,
+            start: 0.,
+            end: 1.,
+        })
+    };
+    [
+        (Edge::Right, Edge::Left),
+        (Edge::Left, Edge::Right),
+        (Edge::Top, Edge::Bottom),
+        (Edge::Bottom, Edge::Top),
+    ]
+    .into_iter()
+    .filter_map(|(a, b)| Some((end(pair[0], a)?, end(pair[1], b)?)))
+    .map(|(a, b)| {
+        vec![
+            EdgeLink {
+                from: a.clone(),
+                to: b.clone(),
+                enabled: true,
+                require_ctrl: true,
+            },
+            EdgeLink {
+                from: b,
+                to: a,
+                enabled: true,
+                require_ctrl: true,
+            },
+        ]
+    })
+    .collect()
+}
+
 pub fn merge(
     config: &Config,
     local: &str,
@@ -80,35 +175,78 @@ pub fn merge(
     );
     let previous = snapshot(config, local, peer);
     let key = |p: &PairLayout| (p.revision, p.author.clone());
-    if key(incoming) < key(&previous) {
+    let needs_automatic_pair = incoming.links.is_empty()
+        && previous.links.is_empty()
+        && !config.links.is_empty()
+        && pair_links(config, local, peer).is_empty();
+    if key(incoming) < key(&previous) && !needs_automatic_pair {
         return Ok(None);
     }
     if key(incoming) == key(&previous) {
         ensure!(incoming.links == previous.links, "相同布局版本的内容不一致");
-        return Ok(None);
+        if !needs_automatic_pair {
+            return Ok(None);
+        }
     }
-    let mut next = config.clone();
-    // First custom pair must not remove the other automatic connections.
-    let defaults = crate::peers::default_links(&topologies);
-    if next.links.is_empty() && !incoming.links.is_empty() {
-        next.links = defaults.clone();
-    }
-    next.links.retain(|l| !belongs(l, local, peer));
-    if incoming.links.is_empty() && !next.links.is_empty() {
-        next.links
-            .extend(defaults.into_iter().filter(|l| belongs(l, local, peer)));
+    let selected = if key(incoming) < key(&previous) {
+        &previous
     } else {
-        next.links.extend(incoming.links.clone());
-    }
-    next.layout_revisions
-        .insert(peer.to_owned(), incoming.clone());
-    next.validate()?;
+        incoming
+    };
+    // Validate the peer's own proposal independently. Never resolve malformed
+    // intervals, unknown monitors or duplicate routes by silently discarding them.
     Layout {
-        topologies,
-        links: next.links.clone(),
+        topologies: topologies.clone(),
+        links: selected.links.clone(),
     }
     .validate()
     .map_err(anyhow::Error::msg)?;
+    let mut next = config.clone();
+    let first_custom = next.links.is_empty() && !selected.links.is_empty();
+    next.links.retain(|l| !belongs(l, local, peer));
+    next.layout_revisions
+        .insert(peer.to_owned(), selected.clone());
+    if selected.links.is_empty() && !next.links.is_empty() {
+        if let Some((index, route)) = automatic_pair(&topologies, local, peer)
+            .into_iter()
+            .enumerate()
+            .find(|(_, route)| fits(&topologies, &next.links, route))
+        {
+            next.links.extend(route.clone());
+            if index != 0 {
+                // An alternative to the default must be a shared, versioned
+                // placement; otherwise each end would draw a different position.
+                next.layout_revisions.insert(
+                    peer.to_owned(),
+                    PairLayout {
+                        revision: selected
+                            .revision
+                            .checked_add(1)
+                            .ok_or_else(|| anyhow::anyhow!("布局版本已达上限"))?,
+                        author: local.to_owned(),
+                        links: route,
+                    },
+                );
+            }
+        }
+    } else {
+        next.links.extend(selected.links.clone());
+    }
+    if first_custom {
+        // Explicit placement wins over generated defaults. Add only whole,
+        // non-conflicting reciprocal pairs, never half of a route.
+        for pair in crate::peers::default_links(&topologies).chunks(2) {
+            if pair.iter().all(|l| !belongs(l, local, peer)) && fits(&topologies, &next.links, pair)
+            {
+                next.links.extend_from_slice(pair);
+            }
+        }
+    }
+    next.validate()?;
+    validate_present(&topologies, &next.links)?;
+    if next.links == config.links && next.layout_revisions == config.layout_revisions {
+        return Ok(None);
+    }
     Ok(Some(next))
 }
 
@@ -275,5 +413,88 @@ mod tests {
         );
         record_changes(&mut draft, &old, "A", &["B".into()]).unwrap();
         assert!(draft.layout_revisions.is_empty());
+    }
+
+    #[test]
+    fn third_computer_uses_a_free_edge_without_changing_the_saved_pair() {
+        let mut t = topologies();
+        t[1].device.os = OperatingSystem::MacOS;
+        t[1].monitors[0].unit = CoordinateUnit::DesktopPoints;
+        t[1].monitors[0].scale = 2.;
+        let saved = crate::peers::default_links(&[t[0].clone(), t[2].clone()]);
+        let config = Config {
+            links: saved.clone(),
+            ..Config::default()
+        };
+        let incoming = snapshot(&Config::default(), "B", "A");
+        let next = merge(&config, "A", "B", &incoming, t.clone())
+            .unwrap()
+            .unwrap();
+        assert_eq!(pair_links(&next, "A", "C"), saved);
+        let shared = snapshot(&next, "A", "B");
+        assert_eq!(shared.links.len(), 2);
+        assert!(shared.revision > incoming.revision);
+        Layout {
+            topologies: t.clone(),
+            links: next.links.clone(),
+        }
+        .validate()
+        .unwrap();
+        // The Mac knows only its directly paired Windows computer.
+        let mac = merge(&Config::default(), "B", "A", &shared, t[..2].to_vec())
+            .unwrap()
+            .unwrap();
+        assert_eq!(snapshot(&mac, "B", "A"), shared);
+        assert!(merge(&next, "A", "B", &shared, t).unwrap().is_none());
+    }
+
+    #[test]
+    fn reconnect_preserves_routes_to_computers_whose_topology_has_not_arrived() {
+        let t = topologies();
+        let saved = crate::peers::default_links(&[t[0].clone(), t[2].clone()]);
+        let config = Config {
+            links: saved.clone(),
+            ..Config::default()
+        };
+        let next = merge(&config, "A", "B", &custom(), t[..2].to_vec())
+            .unwrap()
+            .unwrap();
+        assert_eq!(pair_links(&next, "A", "C"), saved);
+        assert_eq!(snapshot(&next, "A", "B"), custom());
+    }
+
+    #[test]
+    fn offline_edges_stay_reserved_and_identity_order_does_not_prevent_repair() {
+        let t = topologies();
+        let saved = crate::peers::default_links(&[t[0].clone(), t[2].clone()]);
+        let config = Config {
+            links: saved.clone(),
+            ..Config::default()
+        };
+        // C's left edge is occupied by A, whose topology is not here yet.
+        // B's initial author sorts before C, but it still needs an agreed route.
+        let incoming = snapshot(&Config::default(), "B", "C");
+        let next = merge(&config, "C", "B", &incoming, t[1..].to_vec())
+            .unwrap()
+            .unwrap();
+        assert_eq!(pair_links(&next, "A", "C"), saved);
+        let shared = snapshot(&next, "C", "B");
+        assert_eq!(shared.links.len(), 2);
+        assert!(shared
+            .links
+            .iter()
+            .any(|l| l.from.device == "C" && l.from.edge == Edge::Right));
+        assert!(shared.revision > incoming.revision);
+        assert!(merge(&next, "C", "B", &incoming, t).unwrap().is_none());
+    }
+
+    #[test]
+    fn invalid_pair_overlap_is_not_hidden_by_automatic_edge_selection() {
+        let mut invalid = custom();
+        invalid.links.push(invalid.links[0].clone());
+        assert!(merge(&Config::default(), "B", "A", &invalid, topologies())
+            .unwrap_err()
+            .to_string()
+            .contains("overlapping edge links"));
     }
 }

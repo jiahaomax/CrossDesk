@@ -699,6 +699,10 @@ impl Manager {
                     self.apply_tuning(&next)?;
                     self.config = next.clone();
                     update(&self.status, |s| s.config = next);
+                    let accepted = crate::layout_sync::snapshot(&self.config, &self.id, id);
+                    if accepted != incoming {
+                        self.send(id, Message::PairLayout(accepted))?;
+                    }
                     self.publish();
                 }
             }
@@ -1020,9 +1024,16 @@ impl Manager {
                         }),
                     )?;
                 }
-                Action::Recovered => bail!(
-                    "已安全暂停：紧急释放、输入后台异常或切换超时。松开按键后可点击恢复共享。"
-                ),
+                Action::Recovered => {
+                    return Err(self
+                        .source
+                        .as_ref()
+                        .and_then(|source| source.failure.get())
+                        .unwrap_or_else(|| {
+                            crate::safety::Fault::new(crate::safety::Cause::SessionStopped)
+                        })
+                        .into())
+                }
                 _ => {}
             }
         }
@@ -1182,7 +1193,7 @@ pub async fn run(
         },
         _=tick.tick()=>{
             if stop.load(Ordering::Acquire)||manager.restart_requested{break;}
-            if let Some(n)=&manager.source {ensure!(!n.fault.load(Ordering::Acquire),"输入安全保护已触发。已暂停共享，请松开按键后恢复。");n.alive.store(n.started.elapsed().as_millis() as u64,Ordering::Release);}
+            if let Some(n)=&manager.source {if n.fault.load(Ordering::Acquire){return Err(n.failure.get().unwrap_or_else(||crate::safety::Fault::new(crate::safety::Cause::CaptureStopped)).into());}n.alive.store(n.started.elapsed().as_millis() as u64,Ordering::Release);}
             if manager.receiver.as_ref().is_some_and(|n|n.interrupted.load(Ordering::Acquire)){manager.cancel()?;}
             let effects=manager.ownership.expire(manager.now());manager.effects(effects)?;
             let expired:Vec<_>=manager.peers.iter().filter(|(_,p)|p.last_seen.elapsed()>Duration::from_secs(2)).map(|(id,_)|id.clone()).collect();
@@ -1217,6 +1228,11 @@ pub async fn run(
                 })();
                 if let Err(e)=reconciled {update(&status,|s|{s.connection_issues.insert(id,format!("布局未同步：{e:#}"));});continue;}
                 update(&status,|s|{s.connection_issues.remove(&id);});manager.cancelled.remove(&id);manager.peers.insert(id,peer);
+                // Reconciliation may choose a free edge instead of a conflicting
+                // automatic route. Publish that exact accepted placement.
+                for id in manager.peers.keys() {
+                    manager.send(id,Message::PairLayout(crate::layout_sync::snapshot(&manager.config,&manager.id,id)))?;
+                }
                 let settings=crate::settings_sync::snapshot(&manager.config);
                 for id in manager.peers.keys() {manager.send(id,Message::Settings(settings.clone()))?;}
                 manager.publish();

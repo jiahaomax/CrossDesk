@@ -20,6 +20,13 @@ export function emergencyLabel(s: Status | null) {
   return key === 41 ? 'Ctrl + Alt + Esc' : key === 69 ? 'Ctrl + Alt + F12' : `未识别的配置键 (${key})`;
 }
 export function errorSummary(raw: string) {
+  if (/已按下紧急释放快捷键/.test(raw)) return { title: '共享已暂停', hint: '紧急释放已生效。松开按键后，可点击右上角“启用共享”。' };
+  if (/未能确认本机按键已释放|输入清理尚未确认/.test(raw)) return { title: '输入清理尚未完成', hint: '请在设置中选择“退出并停止共享”，然后重新打开 CrossDesk。' };
+  if (/输入调度未及时响应|输入处理停顿超过控制期限|输入传递队列不可用/.test(raw)) return { title: '输入处理暂时中断', hint: '松开按键，点击右上角“启用共享”。再次发生时，可在设置中导出诊断。' };
+  if (/遇到暂不支持转发的输入/.test(raw)) return { title: '此输入暂不支持转发', hint: '共享已暂停。松开按键后，可点击右上角“启用共享”。' };
+  if (/系统输入捕获已停止/.test(raw)) return { title: '系统输入捕获已停止', hint: '确认电脑已解锁，然后点击右上角“启用共享”。' };
+  if (/切换未及时完成/.test(raw)) return { title: '切换没有完成', hint: '松开按键，确认另一台电脑可以操作，再点击“启用共享”。' };
+  if (/显示器布局发生变化/.test(raw)) return { title: '屏幕布局已改变', hint: '确认屏幕布局后，可点击右上角“启用共享”。' };
   if (/显示器读取失败|无法读取一致的 Windows 显示器配置/.test(raw)) return { title: '无法确认当前屏幕布局', hint: '控制已停止，画布暂时保留上次结果。请检查系统显示设置，点击“刷新显示器”重新读取。' };
   if (/后台.*不可用|无法读取设备状态/.test(raw)) return { title: '后台暂时不可用', hint: '请退出并重新打开 CrossDesk。' };
   if (/浏览器预览/.test(raw)) return { title: '尚未连接原生后台', hint: '请运行 CrossDesk 桌面程序，以读取本机设备并使用连接、配对和共享。浏览器不能调用原生后台。' };

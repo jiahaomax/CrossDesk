@@ -147,6 +147,7 @@ function App() {
       setStatus(fresh);
       syncConfig(fresh.config,fresh.last_command);
       if (fresh.last_command?.error) throw Error(fresh.last_command.error);
+      if(command==='resume'&&fresh.enabled&&!fresh.last_error)setRetainedError('');
       if(command==='configure')setSaveError('');
       else setFeedback(command === 'export_diagnostics' && fresh.diagnostics_path ? '诊断已导出：'+fresh.diagnostics_path : messages[command] ?? '后台已完成操作。');
     } catch (e) {

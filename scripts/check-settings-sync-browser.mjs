@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import {makeDemo} from '../apps/desktop/src/demoScenarios.ts';
 const {chromium}=createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE||'playwright');
 const before=process.argv.includes('--baseline');
+const presentationOnly=process.argv.includes('--presentation-only');
 const root=path.resolve(before?(process.env.UI_BASELINE_DIRECTORY||'output/ui-refresh-2026-10-18/baseline/dist'):'apps/desktop/dist');
 const out=path.resolve(process.env.UI_CAPTURE_DIRECTORY||'output/playwright/autosave-2026-10-19');fs.mkdirSync(out,{recursive:true});
 const report={source:'Labelled synthetic fixtures; browser CSS pixels, NOT native Windows DPI or native input',captures:[],checks:[],errors:[]};
@@ -31,12 +32,14 @@ async function nav(t,label){await t.page.getByRole('navigation',{name:'主导航
 
 async function until(predicate,label) {for(let i=0;i<120;i++){if(await predicate())return;await wait(50);}throw Error('timeout: '+label);}
 try {
- for(const [width,height,theme] of [[940,640,'light'],[1200,820,'light'],[940,640,'dark']]) {
-  const t=await setup({width,height,theme});const p=t.page;
+ const cases=presentationOnly?[[1600,1000,'light','windows',1],[940,640,'light','windows',1.25],[1200,820,'light','macos',1],[940,640,'light','ubuntu',1]]:[[940,640,'light','windows',1],[1200,820,'light','windows',1],[940,640,'dark','windows',1]];
+ for(const [width,height,theme,platform,dpr] of cases) {
+  const t=await setup({width,height,theme,platform,dpr});const p=t.page;
   await nav(t,'设置');await p.getByRole('button',{name:'输入与快捷键',exact:true}).click();
-  await capture(t,`initial-settings-${width}-${theme}-FIXTURE`);
-  await nav(t,'工作区');await capture(t,`initial-home-${width}-${theme}-FIXTURE`);
-  if(before){await t.ctx.close();continue;}
+  const suffix=presentationOnly?`-${platform}-dpr${dpr}`:'';
+  await capture(t,`initial-settings-${width}-${theme}${suffix}-FIXTURE`);
+  await nav(t,'工作区');await capture(t,`initial-home-${width}-${theme}${suffix}-FIXTURE`);
+  if(before||presentationOnly){await t.ctx.close();continue;}
   await nav(t,'设置');await p.getByRole('button',{name:'输入与快捷键',exact:true}).click();
   const speed=p.getByRole('slider',{name:'远端鼠标速度'}),modifier=p.getByLabel('切换按键方式');
   assert.equal(await p.getByRole('button',{name:/保存设置|放弃修改/}).count(),0);
@@ -127,7 +130,7 @@ try {
   await t.ctx.close();
  }
 
- if(!before){
+ if(!before&&!presentationOnly){
  const paused=await setup();const p=paused.page;
  await nav(paused,'设置');await p.getByRole('button',{name:'输入与快捷键',exact:true}).click();
  const slider=p.getByRole('slider',{name:'远端鼠标速度'});
@@ -147,6 +150,6 @@ try {
  report.checks.push('pause preempts saving without restoring sharing or losing a newer edit; quit flushes queued edits');
  await paused.ctx.close();
  }
- assert.deepEqual(report.errors,[]);console.log('PASS rendered autosave, delayed receipts, focus, remote sync, failure/retry, validation and drag (fixtures)');
+ assert.deepEqual(report.errors,[]);console.log(before||presentationOnly?'PASS labelled presentation captures without horizontal overflow':'PASS rendered autosave, custom single/chord recording, +/- 0.05, delayed receipts, focus, failure/retry, validation and drag (fixtures)');
  fs.writeFileSync(path.join(out,'report.json'),JSON.stringify(report,null,2));
 } finally {await browser.close();server.close();}

@@ -1,3 +1,4 @@
+use crate::safety::{Cause, Fault, FaultSlot};
 use crossdesk_core::*;
 use crossdesk_platform::{self as platform, NativeEvent};
 use std::{
@@ -34,6 +35,7 @@ pub struct SourceHandle {
     pub commands: SyncSender<SourceCommand>,
     pub stop: Arc<AtomicBool>,
     pub fault: Arc<AtomicBool>,
+    pub failure: FaultSlot,
     pub alive: Arc<AtomicU64>,
     pub started: Instant,
     pub join: Option<std::thread::JoinHandle<()>>,
@@ -59,7 +61,10 @@ pub fn source(mut session: ControlSession, events: Sender<(Instant, Vec<Action>)
     let fault = Arc::new(AtomicBool::new(false));
     let failed = fault.clone();
     let capture_failure = fault.clone();
+    let failure = FaultSlot::default();
+    let reason = failure.clone();
     let join = std::thread::spawn(move || {
+        let capture_reason = reason.clone();
         let mut batcher = MotionBatcher::new(session.tuning.clone());
         let (mut cleanup, cleanup_join) =
             crate::source_cleanup::LocalCleanup::spawn(platform::inject);
@@ -81,9 +86,15 @@ pub fn source(mut session: ControlSession, events: Sender<(Instant, Vec<Action>)
                         SourceCommand::Ready(id, epoch) => {
                             if !stopped {
                                 match activation.ready(&mut session, &mut cleanup, id, epoch, now) {
-                                    Ok(ready) => actions.extend(ready),
+                                    Ok(ready) => {
+                                        if ready.iter().any(|a| matches!(a, Action::Recovered)) {
+                                            reason.record(Fault::new(Cause::SwitchTimeout));
+                                        }
+                                        actions.extend(ready);
+                                    }
                                     Err(error) => {
                                         eprintln!("local input cleanup failed: {error:#}");
+                                        reason.record(Fault::new(Cause::LocalReleaseFailed));
                                         actions.extend(session.recover());
                                         stopped = true;
                                     }
@@ -104,25 +115,42 @@ pub fn source(mut session: ControlSession, events: Sender<(Instant, Vec<Action>)
                     }
                 }
                 if now.saturating_sub(a.load(Ordering::Acquire)) > 500 && !stopped {
+                    reason.record(Fault::elapsed(
+                        Cause::CoordinatorStalled,
+                        now.saturating_sub(a.load(Ordering::Acquire)),
+                    ));
                     actions.extend(session.recover());
                     stopped = true;
                 }
                 if !stopped {
                     match activation.poll(&mut session, &cleanup, now) {
-                        Ok(ready) => actions.extend(ready),
+                        Ok(ready) => {
+                            if ready.iter().any(|a| matches!(a, Action::Recovered)) {
+                                reason.record(Fault::new(Cause::SwitchTimeout));
+                            }
+                            actions.extend(ready);
+                        }
                         Err(error) => {
                             eprintln!("local input cleanup failed: {error:#}");
+                            reason.record(Fault::new(Cause::LocalReleaseFailed));
                             actions.extend(session.recover());
                             stopped = true;
                         }
                     }
                 }
-                actions.extend(session.tick(now));
+                let timed = session.tick(now);
+                if timed.iter().any(|a| matches!(a, Action::Recovered)) {
+                    reason.record(Fault::new(Cause::SwitchTimeout));
+                }
+                actions.extend(timed);
             }
             if !stopped {
                 match event {
                     NativeEvent::Input(e) => {
                         let d = session.input(e);
+                        if d.actions.iter().any(|a| matches!(a, Action::Recovered)) {
+                            reason.record(Fault::new(Cause::EmergencyShortcut));
+                        }
                         suppress = d.suppress;
                         actions.extend(d.actions);
                     }
@@ -138,11 +166,17 @@ pub fn source(mut session: ControlSession, events: Sender<(Instant, Vec<Action>)
                         actions.extend(d.actions);
                     }
                     NativeEvent::UnsupportedKey => {
-                        suppress = session.remote();
-                        actions.extend(session.recover());
-                        stopped = true;
+                        // Unsupported local media/device keys belong to the local OS.
+                        // Stop only if input would otherwise be sent to another computer.
+                        if unsupported_requires_pause(&session.phase) {
+                            reason.record(Fault::new(Cause::UnsupportedRemoteInput));
+                            suppress = true;
+                            actions.extend(session.recover());
+                            stopped = true;
+                        }
                     }
                     NativeEvent::TopologyChanged => {
+                        reason.record(Fault::new(Cause::TopologyChanged));
                         actions.extend(session.recover());
                         stopped = true;
                     }
@@ -156,6 +190,7 @@ pub fn source(mut session: ControlSession, events: Sender<(Instant, Vec<Action>)
                 if matches!(act, Action::LocalRelease { .. }) {
                     if let Err(error) = cleanup.submit(act.clone()) {
                         eprintln!("local input cleanup could not be queued: {error:#}");
+                        reason.record(Fault::new(Cause::LocalReleaseFailed));
                         stopped = true;
                     }
                     false
@@ -174,6 +209,7 @@ pub fn source(mut session: ControlSession, events: Sender<(Instant, Vec<Action>)
             }
             let actions = batcher.process(actions, now);
             if !actions.is_empty() && events.try_send((Instant::now(), actions)).is_err() {
+                reason.record(Fault::new(Cause::SourceQueueUnavailable));
                 let recovery = session.recover();
                 for act in recovery {
                     if matches!(act, Action::LocalRelease { .. }) {
@@ -196,6 +232,7 @@ pub fn source(mut session: ControlSession, events: Sender<(Instant, Vec<Action>)
         };
         if let Err(error) = platform::capture(Box::new(handler), s) {
             eprintln!("native capture stopped: {error:#}");
+            capture_reason.record(Fault::new(Cause::CaptureStopped));
             capture_failure.store(true, Ordering::Release);
         }
         // capture has uninstalled its hooks and dropped the sender. A blocked OS call
@@ -206,11 +243,13 @@ pub fn source(mut session: ControlSession, events: Sender<(Instant, Vec<Action>)
         }
         if cleanup_join.is_finished() {
             if cleanup_join.join().is_err() {
+                capture_reason.record(Fault::new(Cause::CleanupUnconfirmed));
                 capture_failure.store(true, Ordering::Release);
             }
         } else {
             eprintln!("local release worker did not stop within its deadline");
             mark_unconfirmed_cleanup();
+            capture_reason.record(Fault::new(Cause::CleanupUnconfirmed));
             capture_failure.store(true, Ordering::Release);
         }
     });
@@ -219,10 +258,15 @@ pub fn source(mut session: ControlSession, events: Sender<(Instant, Vec<Action>)
         commands: tx,
         stop,
         fault,
+        failure,
         alive,
         started: start,
         join: Some(join),
     }
+}
+
+fn unsupported_requires_pause(phase: &Phase) -> bool {
+    matches!(phase, Phase::RemoteActive | Phase::PreparingSwitch)
 }
 
 pub enum ReceiverCommand {
@@ -493,6 +537,13 @@ pub fn receiver(topology: DeviceTopology, lease_ms: u64) -> ReceiverHandle {
 #[cfg(test)]
 mod takeover_tests {
     use super::*;
+    #[test]
+    fn unsupported_local_input_does_not_stop_sharing_but_remote_input_does() {
+        assert!(!unsupported_requires_pause(&Phase::LocalActive));
+        assert!(!unsupported_requires_pause(&Phase::Paused));
+        assert!(unsupported_requires_pause(&Phase::RemoteActive));
+        assert!(unsupported_requires_pause(&Phase::PreparingSwitch));
+    }
     #[test]
     fn physical_motion_takes_over_without_consuming_the_movement() {
         let ready = AtomicBool::new(false);

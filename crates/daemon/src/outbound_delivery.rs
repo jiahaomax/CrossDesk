@@ -1,4 +1,4 @@
-use anyhow::{ensure, Result};
+use anyhow::Result;
 use crossdesk_core::{Action, InputEvent};
 use std::time::{Duration, Instant};
 
@@ -23,10 +23,14 @@ pub fn prepare_actions(
                 _ => None, // Never prevent release/recovery because it waited in a queue.
             };
             if let Some(ms) = deadline {
-                ensure!(
-                    now.saturating_duration_since(queued) < Duration::from_millis(ms),
-                    "输入处理停顿超过控制期限，请检查电脑负载后恢复共享"
-                );
+                let elapsed = now.saturating_duration_since(queued);
+                if elapsed >= Duration::from_millis(ms) {
+                    return Err(crate::safety::Fault::elapsed(
+                        crate::safety::Cause::OutboundExpired,
+                        elapsed.as_millis() as u64,
+                    )
+                    .into());
+                }
             }
             if let Action::Deliver {
                 target,

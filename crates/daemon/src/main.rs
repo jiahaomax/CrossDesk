@@ -9,6 +9,7 @@ mod network_policy;
 mod outbound_delivery;
 mod pairing;
 mod peers;
+mod safety;
 mod settings_sync;
 mod source_cleanup;
 mod status;
@@ -227,9 +228,10 @@ async fn run() -> Result<()> {
                     let stop=Arc::new(AtomicBool::new(false));let stopped=stop.clone();
                     update(&status,|s|s.enabled=config.sharing);
                     let (configure, updates)=tokio::sync::mpsc::channel(8);
+                    let diagnostics_dir=dir.clone();
                     let task=tokio::spawn(async move{
                         let result=peers::run(id,config,shared.clone(),stopped,observe_only,updates).await;
-                        if let Err(e)=result {update(&shared,|s|{s.enabled=false;s.config.sharing=false;s.active=None;s.last_error=Some(format!("{e:#}"));s.state="已安全暂停 · 可以恢复共享".into();});let paused=shared.lock().unwrap().config.clone();let _=paused.save();}
+                        if let Err(e)=result {if let Err(write_error)=safety::record(&diagnostics_dir,&e){eprintln!("could not save fault diagnostics: {write_error:#}");}update(&shared,|s|{s.enabled=false;s.config.sharing=false;s.active=None;s.last_error=Some(format!("{e:#}"));s.state="已安全暂停 · 可以恢复共享".into();});let paused=shared.lock().unwrap().config.clone();let _=paused.save();}
                     });
                     running=Some(Running{stop,task,configure});
                 }
@@ -294,7 +296,8 @@ async fn run() -> Result<()> {
                         Command::Refresh=>{refresh_addresses(&status);display_state::refresh(&status,&mut running,&identity.id,&mut version).await?;},
                         Command::Discover=>{refresh_addresses(&status);if let Some(d)=discovery.take(){let _=d.shutdown();}discovery=Some(discovery::start(&identity.id,status.clone())?);update(&status,|s|s.discovery_error=None);},
                         Command::ExportDiagnostics=>{
-                            let s=status.lock().unwrap();let sanitized=serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"platform":std::env::consts::OS,"state":s.state,"connected_devices":s.topology.len(),"display_counts":s.topology.iter().map(|t|t.monitors.len()).collect::<Vec<_>>(),"rtt_ms":s.rtt_ms,"received_count":s.received,"sharing":s.enabled});
+                            let incidents=safety::history(&dir);
+                            let s=status.lock().unwrap();let sanitized=serde_json::json!({"version":env!("CARGO_PKG_VERSION"),"diagnostics_schema":2,"platform":std::env::consts::OS,"protocol":crossdesk_transport::protocol::VERSION,"test_edition":crossdesk_core::profile::IS_TEST,"state":s.state,"connected_devices":s.topology.len(),"display_counts":s.topology.iter().map(|t|t.monitors.len()).collect::<Vec<_>>(),"rtt_ms":s.rtt_ms,"received_count":s.received,"sharing":s.enabled,"safety_history":incidents.as_ref().ok(),"safety_history_read_failed":incidents.is_err()});
                             atomic_save(&dir.join("diagnostics.json"),&serde_json::to_vec_pretty(&sanitized)?)?;drop(s);update(&status,|s|s.diagnostics_path=Some(dir.join("diagnostics.json").to_string_lossy().into_owned()));
                         },
                         Command::StartSource|Command::StartReceiver|Command::Resume=>{
