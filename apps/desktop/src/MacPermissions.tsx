@@ -2,7 +2,6 @@ import {useState} from 'react';
 import {CheckCircle2, ExternalLink, Loader2} from 'lucide-react';
 import type {Status} from './types';
 import {Button} from './ui/button';
-import {ErrorNotice} from './ui/ErrorNotice';
 
 export const isMacPermissionError=(error:string)=>/source not ready|请先开启 Mac 的|无法打开系统设置|无法向系统申请辅助功能权限/.test(error);
 export function needsMacPermissions(status: Status | null) {
@@ -21,7 +20,7 @@ export function MacPermissions({status,disabled,pending,problem,onCommand,onEnab
   const ready=!!p&&p.accessibility&&p.input_monitoring&&p.post_event;
   return <div className="mac-permissions">
     <p>共享键鼠需要以下两项权限。点击打开系统设置，为 CrossDesk 开启对应开关。</p>
-    {problem&&<ErrorNotice raw={problem}/>}
+    {problem&&<p className="permission-error" role="alert">{problem.replace(/^Error:\s*/,'')}</p>}
     {([
       ['accessibility','辅助功能','允许另一台电脑操作这台 Mac',p? p.accessibility&&p.post_event:undefined],
       ['input_monitoring','输入监控','读取本机键鼠，以便跨电脑使用',p?.input_monitoring],

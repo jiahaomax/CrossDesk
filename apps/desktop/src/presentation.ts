@@ -20,7 +20,9 @@ export function emergencyLabel(s: Status | null) {
   return key === 41 ? 'Ctrl + Alt + Esc' : key === 69 ? 'Ctrl + Alt + F12' : `未识别的配置键 (${key})`;
 }
 export function errorSummary(raw: string) {
-  if (/source not ready|请先开启 Mac 的/.test(raw)) return {title:'Mac 键鼠权限未开启',hint:'点击“设置权限”，开启辅助功能和输入监控后再启用共享。'};
+  if (/source not ready/.test(raw)) return {title:'本机暂不能共享键鼠',hint:'请在设置 → 权限与诊断中检查本机权限，再启用共享。'};
+  if (/请先开启 Mac 的/.test(raw)) return {title:'Mac 键鼠权限未开启',hint:'点击“设置权限”，开启辅助功能和输入监控后再启用共享。'};
+  if (/无法打开系统设置/.test(raw)) return {title:'系统设置未打开',hint:'请在 Mac 的系统设置 → 隐私与安全性中开启对应权限。'};
   if (/invalid edge interval or missing monitor|尚未收到这台电脑的屏幕信息/.test(raw)) return {title:'这个方向无法保存',hint:'请确认对方已连接，并重新选择电脑方向。原来保存的位置仍保留。'};
   if (/已按下紧急释放快捷键/.test(raw)) return { title: '共享已暂停', hint: '紧急释放已生效。松开按键后，可点击右上角“启用共享”。' };
   if (/未能确认本机按键已释放|输入清理尚未确认/.test(raw)) return { title: '输入清理尚未完成', hint: '请在设置中选择“退出并停止共享”，然后重新打开 CrossDesk。' };

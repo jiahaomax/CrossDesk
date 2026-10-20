@@ -119,3 +119,5 @@ kbd{font-family:inherit;font-size:13px;white-space:nowrap;padding:3px 7px;border
 .permission-row>.button{flex-shrink:0}
 .permission-troubleshooting{font-size:13px;line-height:1.65}
 .permission-troubleshooting p{margin:8px 0}
+.mac-permissions .permission-error{padding:8px 10px;background:var(--danger-bg);color:var(--danger);font-size:14px;overflow-wrap:anywhere}
+.mac-permissions .dialog-actions{position:sticky;bottom:0;background:var(--paper);padding:12px 0;margin-top:12px}

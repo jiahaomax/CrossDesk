@@ -80,7 +80,12 @@ try {
     assert.equal(await dialog.getByRole('button',{name:'启用共享',exact:true}).isDisabled(),true);
     failOpen=true;
     await dialog.getByRole('button',{name:'打开辅助功能',exact:true}).click();
-    await dialog.getByText('操作未完成',{exact:true}).waitFor();
+    await dialog.getByRole('alert').getByText('无法打开系统设置',{exact:false}).waitFor();
+    assert.ok(await dialog.evaluate(el=>{
+      const button=el.querySelector('.dialog-actions button').getBoundingClientRect();
+      const box=el.getBoundingClientRect();
+      return button.bottom<box.bottom&&button.top>box.top;
+    }),'permission recovery controls stay visible at minimum height');
     await page.screenshot({path:path.join(out,`open-failed-${width}-${theme}-FIXTURE.png`)});
     failOpen=false;
     await dialog.getByRole('button',{name:'重新检测',exact:true}).click();
