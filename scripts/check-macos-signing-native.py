@@ -61,6 +61,7 @@ with tempfile.TemporaryDirectory(prefix="crossdesk-signing-proof-") as directory
     first = make_certificate(root / "first")
     other = make_certificate(root / "other")
     a, b, impostor = (make_app(root, version) for version in ("1", "2", "3"))
+    print("Checking different builds with one certificate", flush=True)
     with signing.signing_keychain(*first) as env:
         old = signing.sign_app(a, env)
         new = signing.sign_app(b, env)
@@ -75,7 +76,10 @@ with tempfile.TemporaryDirectory(prefix="crossdesk-signing-proof-") as directory
     # Verify without the signer's private key/keychain or explicit runner trust.
     run("/usr/bin/codesign", "--verify", "--deep", "--strict", "-R",
         old["requirements"][signing.BUNDLE_ID], b)
-    report["checks"].append("Identity verification still succeeds after build keychain and explicit trust are removed")
+    assert run(b / "Contents/MacOS/fixture").stdout.strip() == b"2"
+    assert run(b / "Contents/MacOS/crossdesk-test-daemon").stdout.strip() == b"2"
+    report["checks"].append("Verification and fixture execution succeed without build keychain or explicit certificate trust")
+    print("Checking impostor certificate and tampered content", flush=True)
     with signing.signing_keychain(*other) as env:
         signing.sign_app(impostor, env)
     result = run("/usr/bin/codesign", "--verify", "--strict", "-R",

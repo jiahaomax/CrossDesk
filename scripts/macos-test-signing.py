@@ -75,7 +75,7 @@ def signing_keychain(p12, password, expected_sha256):
         run("/usr/bin/openssl", "x509", "-in", cert, "-checkend", str(30 * 86400), "-noout")
         identity = hashlib.sha1(der).hexdigest().upper()
         keychain_password = secrets.token_urlsafe(32)
-        created = trusted = False
+        created = False
         try:
             run("/usr/bin/security", "create-keychain", "-p", keychain_password, keychain)
             created = True
@@ -85,22 +85,14 @@ def signing_keychain(p12, password, expected_sha256):
             run("/usr/bin/security", "import", archive, "-k", keychain, "-P", password, "-T", "/usr/bin/codesign")
             run("/usr/bin/security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:",
                 "-s", "-k", keychain_password, keychain)
-            # Self-signed code-signing trust exists only on this disposable
-            # build runner. The distributed app never installs a trust root.
-            # User-domain trust edits invoke an authentication UI even on CI.
-            # The guard above permits only disposable GitHub-hosted machines;
-            # scoped admin-domain trust avoids that unavailable interactive UI.
-            run("/usr/bin/sudo", "-n", "/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "codeSign",
-                "-k", keychain, cert)
-            trusted = True
+            # Certificate-bound identity checks do not require granting this
+            # self-signed certificate system trust. Never install a trust root.
             yield dict(
                 CROSSDESK_TEST_SIGNING_KEYCHAIN=str(keychain),
                 CROSSDESK_TEST_SIGNING_IDENTITY=identity,
                 CROSSDESK_TEST_CERT_SHA256=expected_sha256,
             )
         finally:
-            if trusted:
-                run("/usr/bin/sudo", "-n", "/usr/bin/security", "remove-trusted-cert", "-d", cert, check=False)
             run("/usr/bin/security", "list-keychains", "-d", "user", "-s", *original)
             if created:
                 run("/usr/bin/security", "delete-keychain", keychain)
