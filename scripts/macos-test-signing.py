@@ -23,9 +23,12 @@ HELPER_ID = BUNDLE_ID + ".daemon"
 
 
 def run(*args, env=None, check=True):
-    result = subprocess.run(
-        [str(arg) for arg in args], capture_output=True, env=env, timeout=120
-    )
+    try:
+        result = subprocess.run(
+            [str(arg) for arg in args], capture_output=True, env=env, timeout=120
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"{Path(str(args[0])).name} timed out") from None
     if check and result.returncode:
         # CalledProcessError includes command arguments, which can contain the
         # temporary keychain password. Never include those in build logs.
@@ -84,7 +87,10 @@ def signing_keychain(p12, password, expected_sha256):
                 "-s", "-k", keychain_password, keychain)
             # Self-signed code-signing trust exists only on this disposable
             # build runner. The distributed app never installs a trust root.
-            run("/usr/bin/security", "add-trusted-cert", "-r", "trustRoot", "-p", "codeSign",
+            # User-domain trust edits invoke an authentication UI even on CI.
+            # The guard above permits only disposable GitHub-hosted machines;
+            # scoped admin-domain trust avoids that unavailable interactive UI.
+            run("/usr/bin/sudo", "-n", "/usr/bin/security", "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "codeSign",
                 "-k", keychain, cert)
             trusted = True
             yield dict(
@@ -94,7 +100,7 @@ def signing_keychain(p12, password, expected_sha256):
             )
         finally:
             if trusted:
-                run("/usr/bin/security", "remove-trusted-cert", cert, check=False)
+                run("/usr/bin/sudo", "-n", "/usr/bin/security", "remove-trusted-cert", "-d", cert, check=False)
             run("/usr/bin/security", "list-keychains", "-d", "user", "-s", *original)
             if created:
                 run("/usr/bin/security", "delete-keychain", keychain)
