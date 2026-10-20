@@ -256,6 +256,31 @@ impl Drop for ReceiverHandle {
         }
     }
 }
+// Native adapters already exclude injected events. A physical mouse movement
+// takes over locally immediately; it must never be forwarded to the old source.
+// Keys/buttons remain blocked only until the worker releases its remote ledger.
+fn receiver_capture(
+    event: NativeEvent,
+    ready: &AtomicBool,
+    active: &AtomicBool,
+    interrupted: &AtomicBool,
+) -> bool {
+    if matches!(event, NativeEvent::Started) {
+        ready.store(true, Ordering::Release);
+    }
+    let physical = !matches!(
+        event,
+        NativeEvent::Started | NativeEvent::Tick | NativeEvent::Shutdown
+    ) && active.load(Ordering::Acquire);
+    if physical {
+        interrupted.store(true, Ordering::Release);
+    }
+    physical
+        && !matches!(
+            event,
+            NativeEvent::Motion { .. } | NativeEvent::LocalActivity
+        )
+}
 pub fn receiver(topology: DeviceTopology, lease_ms: u64) -> ReceiverHandle {
     let (tx, rx) = mpsc::sync_channel(512);
     let stop = Arc::new(AtomicBool::new(false));
@@ -269,19 +294,7 @@ pub fn receiver(topology: DeviceTopology, lease_ms: u64) -> ReceiverHandle {
     let capture_failure = interrupted.clone();
     let capture_join = std::thread::spawn(move || {
         let failed = platform::capture(
-            Box::new(move |e| {
-                if matches!(e, NativeEvent::Started) {
-                    capture_ready.store(true, Ordering::Release);
-                }
-                let physical = !matches!(
-                    e,
-                    NativeEvent::Started | NativeEvent::Tick | NativeEvent::Shutdown
-                ) && capture_active.load(Ordering::Acquire);
-                if physical {
-                    local.store(true, Ordering::Release);
-                }
-                physical
-            }),
+            Box::new(move |e| receiver_capture(e, &capture_ready, &capture_active, &local)),
             capture_stop,
         );
         if failed.is_err() {
@@ -462,5 +475,57 @@ pub fn receiver(topology: DeviceTopology, lease_ms: u64) -> ReceiverHandle {
         stop,
         join: Some(join),
         capture_join: Some(capture_join),
+    }
+}
+
+#[cfg(test)]
+mod takeover_tests {
+    use super::*;
+    #[test]
+    fn physical_motion_takes_over_without_consuming_the_movement() {
+        let ready = AtomicBool::new(false);
+        let active = AtomicBool::new(true);
+        let interrupted = AtomicBool::new(false);
+        for event in [NativeEvent::Started, NativeEvent::Tick] {
+            assert!(!receiver_capture(event, &ready, &active, &interrupted));
+        }
+        assert!(ready.load(Ordering::Acquire));
+        assert!(!interrupted.load(Ordering::Acquire));
+        for event in [
+            NativeEvent::LocalActivity, // Windows low-level motion hook.
+            NativeEvent::Motion {
+                delta: Point { x: 12., y: -3. },
+                local: Point { x: 400., y: 500. },
+            },
+        ] {
+            assert!(!receiver_capture(event, &ready, &active, &interrupted));
+            assert!(interrupted.load(Ordering::Acquire));
+        }
+        // Remote modifiers/buttons must be released before local clicks pass.
+        let click = NativeEvent::Input(InputEvent::Button {
+            button: 1,
+            down: true,
+        });
+        assert!(receiver_capture(
+            click.clone(),
+            &ready,
+            &active,
+            &interrupted
+        ));
+        active.store(false, Ordering::Release);
+        assert!(!receiver_capture(click, &ready, &active, &interrupted));
+    }
+    #[test]
+    fn inactive_receiver_does_not_interfere_with_local_mouse() {
+        let ready = AtomicBool::new(true);
+        let active = AtomicBool::new(false);
+        let interrupted = AtomicBool::new(false);
+        assert!(!receiver_capture(
+            NativeEvent::LocalActivity,
+            &ready,
+            &active,
+            &interrupted
+        ));
+        assert!(!interrupted.load(Ordering::Acquire));
     }
 }

@@ -1,0 +1,3 @@
+export function MouseSpeedControl({value,onChange,disabled=false,label='远端鼠标速度'}:{value?:number;onChange:(value:number)=>void;disabled?:boolean;label?:string}) {
+ return <label className="mouse-speed-control" title="只调整跨电脑后的移动速度，不改变鼠标硬件 DPI。"><span className="sr-only">{label}</span><span aria-hidden="true">慢</span><input aria-label={label} type="range" min="0.25" max="4" step="0.05" value={value??1} disabled={disabled||value===undefined} onChange={e=>onChange(Number(e.target.value))}/><span aria-hidden="true">快</span><output aria-hidden="true">{value===undefined?'—':`${value.toFixed(2)}×`}</output></label>;
+}

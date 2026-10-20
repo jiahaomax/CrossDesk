@@ -4,8 +4,8 @@ import type {Status} from './types';
 export function HelpView({status,platform}:{status:Status|null;platform:Platform}) {
  return <div className="help-page"><div className="page-intro"><h2>快速开始</h2></div><div className="help-start"><div><Monitor size={24}/><strong>两台都运行</strong><p>连接同一局域网</p></div><ChevronRight size={18}/><div><Link2 size={24}/><strong>交换配对码</strong><p>输入 IP 和 8 位配对码</p></div><ChevronRight size={18}/><div><ShieldCheck size={24}/><strong>双方确认</strong><p>确认电脑名称</p></div></div>
  <section><Keyboard size={22}/><div><h3>跨电脑：{switchingLabel(status)}</h3><p>向配置边缘继续移动即可切换；同一电脑内部多屏照常移动。切换按键可在“设置 → 输入与快捷键”修改。</p>{status?.config.tuning?.switch_modifier!=='None'&&<p>切换后可以松开按键，仍留在目标电脑。要使用该键的普通快捷键，先松开再重新按下。Mac 的 Ctrl 指 Control。</p>}</div></section>
- <section><Waypoints size={22}/><div><h3>设置切换方向</h3><p>配对后默认支持左右往返，无需再设置。需要改变方向时，点工作区下方“切换方向”，选择另一台电脑的位置；来回两个方向会一起设置。</p></div></section>
- <section><Pause size={22}/><div><h3>暂停共享与本机接管</h3><p>右上角可以随时暂停。暂停后电脑仍可在线；被控制电脑操作自己的物理键鼠，会收回本机控制。首次动作可能被消费，随后再操作。</p></div></section>
+ <section><Waypoints size={22}/><div><h3>设置切换方向</h3><p>配对后默认支持左右往返，无需再设置。需要改变方向时，点工作区下方“电脑方向”，选择另一台电脑的位置；来回两个方向会一起设置。</p></div></section>
+ <section><Pause size={22}/><div><h3>暂停共享与本机接管</h3><p>每台电脑都能用自己的鼠标；跨过边缘才控制另一台。在对方电脑移动它自己的鼠标，会接回本机，两边各自使用。右上角可暂停共享，连接仍保留。</p></div></section>
  <div className="help-safety"><ShieldCheck size={22}/><div><h3>紧急释放</h3><p>在物理键鼠所在电脑按下当前生效的组合键。</p></div><kbd>{emergencyLabel(status)}</kbd></div>
  <details><summary>为什么重连不需要验证码？</summary><p>首次双方确认后，电脑保存对方的证书信任。再次连接会重新认证身份，不是根据 IP 自动信任，也不复用旧验证码。取消配对后，需要重新配对。</p></details>
  <details><summary>关闭窗口和退出有什么区别？</summary><p>关闭窗口只隐藏界面，后台保留共享状态。从{platform==='macos'?'菜单栏':'系统托盘'}可重新打开。要停止后台，在“设置 → 外观与常用”选择“退出软件”，再确认“退出并停止共享”。</p></details>

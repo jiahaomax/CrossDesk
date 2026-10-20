@@ -100,6 +100,45 @@ fn switch(s: &mut ControlSession, to: &str, now: u64) -> Vec<Action> {
     s.prepared(to, s.epoch, now + 1)
 }
 #[test]
+fn each_computer_has_local_mouse_and_can_initiate_remote_control() {
+    // Both use the same physical arrangement. No fixed server/client roles.
+    let mut l = layout();
+    l.links.retain(|link| link.from.device == "A");
+    l.links.push(EdgeLink {
+        from: end("B", "main", Edge::Left),
+        to: end("A", "main", Edge::Right),
+        enabled: true,
+        require_ctrl: true,
+    });
+    for (source, target, edge, delta) in [("A", "B", 999., 10.), ("B", "A", 0., -10.)] {
+        let mut s = ControlSession::new(source.into(), l.clone()).unwrap();
+        let local = s.motion(Point { x: 500., y: 500. }, Point { x: 10., y: 0. }, 0);
+        assert!(!local.suppress);
+        assert!(local.actions.is_empty());
+        key(&mut s, PhysicalKey::LEFT_CTRL, true);
+        s.motion(Point { x: edge, y: 500. }, Point { x: delta, y: 0. }, 100);
+        s.prepared(target, s.epoch, 101);
+        key(&mut s, PhysicalKey::LEFT_CTRL, false);
+        let remote = s.motion(s.position, Point { x: delta, y: 0. }, 110);
+        assert!(remote.suppress);
+        assert!(remote
+            .actions
+            .iter()
+            .all(|a| matches!(a, Action::Deliver {target: id, ..} if id == target)));
+        assert!(!remote.actions.is_empty());
+        // Target's physical mouse cancels this control. Recovery never warps
+        // the old source cursor or forwards the target's physical movement.
+        let recovery = s.recover();
+        assert!(!recovery
+            .iter()
+            .any(|a| matches!(a, Action::Deliver { .. } | Action::Activate { .. })));
+        s.resume().unwrap();
+        let local = s.motion(Point { x: 500., y: 500. }, Point { x: 5., y: 0. }, 500);
+        assert!(!local.suppress);
+        assert!(local.actions.is_empty());
+    }
+}
+#[test]
 fn no_ctrl_no_cross_even_two_windows() {
     let mut s = ControlSession::new("A".into(), layout()).unwrap();
     assert!(s

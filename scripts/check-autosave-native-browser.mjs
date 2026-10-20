@@ -37,15 +37,15 @@ export async function checkAutosave(a,b) {
       });
       await p.addInitScript(()=>{globalThis.isTauri=true;globalThis.__TAURI_INTERNALS__={invoke:(c,a)=>globalThis.nativeTestInvoke(c,a)};});
       await p.goto(`http://127.0.0.1:${server.address().port}`);
-      await p.getByRole('navigation',{name:'主导航',exact:true}).getByRole('button',{name:'设置',exact:true}).click();
-      await p.getByRole('button',{name:'输入与快捷键',exact:true}).click();
-      await p.getByRole('slider',{name:'远端鼠标速度'}).waitFor();pages.push(p);
+      await p.getByRole('slider',{name:'鼠标移动速度'}).waitFor();pages.push(p);
     }
-    const [pa,pb]=pages,sa=pa.getByRole('slider',{name:'远端鼠标速度'}),sb=pb.getByRole('slider',{name:'远端鼠标速度'});
+    const [pa,pb]=pages,sa=pa.getByRole('slider',{name:'鼠标移动速度'}),sb=pb.getByRole('slider',{name:'鼠标移动速度'});
     await sa.fill('2.25');await until(()=>b.status.config.tuning.mouse_speed===2.25,'A to B native save');
     await until(async()=>await sb.inputValue()==='2.25','B UI poll');
     await sb.fill('1.5');await until(()=>a.status.config.tuning.mouse_speed===1.5,'B to A native save');
     await until(async()=>await sa.inputValue()==='1.5','A UI poll');
+    const out=path.resolve(process.env.UI_CAPTURE_DIRECTORY||'output/playwright/mouse-handoff-2026-10-20');fs.mkdirSync(out,{recursive:true});
+    for(const [index,p] of pages.entries()){await p.evaluate(()=>{const label=document.createElement('div');label.textContent='真实后台 · 隔离测试 · 未捕获输入';label.style='position:fixed;bottom:7px;left:40%;font:13px Segoe UI;color:#805b15;background:#fff6df;z-index:99;padding:2px 8px';document.body.append(label);});await p.screenshot({path:path.join(out,`native-home-${index+1}-1200.png`)});}
     await pa.getByRole('navigation',{name:'主导航',exact:true}).getByRole('button',{name:'工作区',exact:true}).click();
     const target=await pa.locator(`[data-device-group="${b.status.identity}"] .monitor`).first().boundingBox();
     const local=await pa.locator(`[data-device-group="${a.status.identity}"] .monitor`).first().boundingBox();

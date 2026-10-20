@@ -75,6 +75,32 @@ impl Pings {
 fn release_matches(epoch: u64, active: Option<u64>, prepared: Option<u64>) -> bool {
     active == Some(epoch) || (active.is_none() && prepared == Some(epoch))
 }
+
+// Cancel and input travel in opposite TLS directions. The peer can have already
+// sent input when it receives Cancel. Drain only that known retired control until
+// its ordered Cancelled acknowledgement; never pass these packets to native input.
+struct CancelledControl {
+    claim: Claim,
+    outgoing_epochs: Vec<u64>,
+}
+impl CancelledControl {
+    fn discards(&self, local: &str, peer: &str, message: &Message) -> bool {
+        match message {
+            Message::Input(p) => {
+                self.claim.origin == peer && p.source == peer && p.session == self.claim.nonce
+            }
+            Message::Prepare { .. } | Message::Activate { .. } | Message::Release { .. } => {
+                self.claim.origin == peer
+            }
+            Message::Ready { epoch }
+            | Message::Activated { epoch }
+            | Message::Released { epoch } => {
+                self.claim.origin == local && self.outgoing_epochs.contains(epoch)
+            }
+            _ => false,
+        }
+    }
+}
 enum Event {
     Connected(String, Peer),
     Message(String, u64, Instant, Result<Message>),
@@ -286,6 +312,7 @@ struct Manager {
     receiver: Option<ReceiverHandle>,
     actions: mpsc::Receiver<(Instant, Vec<Action>)>,
     ownership: Ownership,
+    cancelled: BTreeMap<String, CancelledControl>,
     pending: Option<(String, u64, Point)>,
     active: String,
     epoch: u64,
@@ -500,6 +527,7 @@ impl Manager {
     }
     fn cancel(&mut self) -> Result<()> {
         if let Some(c) = self.ownership.claim().cloned() {
+            self.remember_cancelled(&c);
             let effects = self.ownership.cancel(&c);
             self.effects(effects)?;
         } else {
@@ -507,6 +535,26 @@ impl Manager {
         }
         self.publish();
         Ok(())
+    }
+    fn remember_cancelled(&mut self, claim: &Claim) {
+        for peer in self.peers.keys() {
+            let mut outgoing_epochs = vec![];
+            if &self.active == peer {
+                outgoing_epochs.push(self.epoch);
+            }
+            if let Some((target, epoch, _)) = &self.pending {
+                if target == peer {
+                    outgoing_epochs.push(*epoch);
+                }
+            }
+            self.cancelled.insert(
+                peer.clone(),
+                CancelledControl {
+                    claim: claim.clone(),
+                    outgoing_epochs,
+                },
+            );
+        }
     }
     fn prepare_target(&mut self) -> Result<()> {
         let Some((target, epoch, position)) = self.pending.clone() else {
@@ -531,6 +579,21 @@ impl Manager {
         }
         Ok(())
     }
+    fn reserve_pending(&mut self) -> Result<()> {
+        if self.pending.is_none() || self.ownership.claim().is_some() || !self.cancelled.is_empty()
+        {
+            return Ok(());
+        }
+        let effects = self.ownership.begin(
+            Claim {
+                origin: self.id.clone(),
+                nonce: rand::random(),
+            },
+            self.neighbors(),
+            self.now(),
+        );
+        self.effects(effects)
+    }
     fn release_old(&mut self) -> Result<()> {
         if self.active != self.id {
             self.send(&self.active, Message::Release { epoch: self.epoch })?;
@@ -551,6 +614,7 @@ impl Manager {
         if self.source.is_some()
             || self.receiver.is_some()
             || self.ownership.claim().is_some()
+            || !self.cancelled.is_empty()
             || !self.config.sharing
             || self.observe_only
             || self.peers.is_empty()
@@ -580,6 +644,13 @@ impl Manager {
         Ok(())
     }
     async fn message(&mut self, id: &str, queued: Instant, m: Message) -> Result<()> {
+        if self
+            .cancelled
+            .get(id)
+            .is_some_and(|c| c.discards(&self.id, id, &m))
+        {
+            return Ok(());
+        }
         // Network presence is not input. Only input/control events have the short age bound.
         if matches!(m, Message::Input(_))
             && queued.elapsed() >= Duration::from_millis(self.config.tuning.lease_ms)
@@ -615,9 +686,12 @@ impl Manager {
             }
             Message::Claim(c) => {
                 ensure!(c.origin.len() <= 128, "无效控制请求");
+                // A new request on this ordered connection follows the old traffic.
+                self.cancelled.remove(id);
                 if !self.config.sharing
                     || !self.peers[id].sharing
                     || self.observe_only
+                    || !self.cancelled.is_empty()
                     || (self.ownership.claim().is_none() && !platform::physical_idle())
                 {
                     self.send(id, Message::Denied(c))?;
@@ -634,15 +708,22 @@ impl Manager {
                 self.effects(effects)?;
             }
             Message::Denied(c) => {
-                let effects = self.ownership.cancel(&c);
-                self.effects(effects)?;
+                if self.ownership.claim() == Some(&c) {
+                    self.cancel()?;
+                }
             }
             Message::Cancel(c) => {
-                let effects = self.ownership.cancel(&c);
-                self.effects(effects)?;
+                if self.ownership.claim() == Some(&c) {
+                    self.cancel()?;
+                }
                 self.send(id, Message::Cancelled(c))?;
             }
-            Message::Cancelled(_) => {}
+            Message::Cancelled(c) => {
+                if self.cancelled.get(id).is_some_and(|old| old.claim == c) {
+                    self.cancelled.remove(id);
+                    self.reserve_pending()?;
+                }
+            }
             Message::Renew { claim, sequence } => {
                 ensure!(
                     queued.elapsed() < Duration::from_millis(1200),
@@ -844,15 +925,7 @@ impl Manager {
                 } => {
                     self.pending = Some((target, epoch, position));
                     if self.ownership.claim().is_none() {
-                        let effects = self.ownership.begin(
-                            Claim {
-                                origin: self.id.clone(),
-                                nonce: rand::random(),
-                            },
-                            self.neighbors(),
-                            self.now(),
-                        );
-                        self.effects(effects)?;
+                        self.reserve_pending()?;
                     } else {
                         self.prepare_target()?;
                     }
@@ -874,6 +947,7 @@ impl Manager {
                         })?;
                         // Keep this source session alive to consume the switching Ctrl-up.
                         if let Some(c) = self.ownership.claim().cloned() {
+                            self.remember_cancelled(&c);
                             let effects = self.ownership.cancel(&c);
                             for effect in effects {
                                 if let Effect::Cancel(id, c) = effect {
@@ -1046,6 +1120,7 @@ pub async fn run(
         receiver: None,
         actions,
         ownership: Ownership::default(),
+        cancelled: BTreeMap::new(),
         pending: None,
         active: identity.id.clone(),
         epoch: 0,
@@ -1073,7 +1148,7 @@ pub async fn run(
             if manager.receiver.as_ref().is_some_and(|n|n.interrupted.load(Ordering::Acquire)){manager.cancel()?;}
             let effects=manager.ownership.expire(manager.now());manager.effects(effects)?;
             let expired:Vec<_>=manager.peers.iter().filter(|(_,p)|p.last_seen.elapsed()>Duration::from_secs(2)).map(|(id,_)|id.clone()).collect();
-            for id in expired {manager.cancel()?;manager.peers.remove(&id);update(&status,|s|{s.connection_issues.insert(id.clone(),"连接响应超时".into());});manager.publish();}
+            for id in expired {manager.cancel()?;manager.peers.remove(&id);manager.cancelled.remove(&id);update(&status,|s|{s.connection_issues.insert(id.clone(),"连接响应超时".into());});manager.publish();}
             manager.start_source()?;
             if pulse.elapsed()>=Duration::from_millis(manager.config.tuning.heartbeat_ms){pulse=Instant::now();
                 if let Some(c)=manager.ownership.claim().filter(|c|c.origin==manager.id).cloned(){manager.renewal+=1;for id in manager.ownership.renew(None,&c,manager.renewal,manager.now()){manager.send(&id,Message::Renew{claim:c.clone(),sequence:manager.renewal})?;}}
@@ -1103,7 +1178,7 @@ pub async fn run(
                     Ok(())
                 })();
                 if let Err(e)=reconciled {update(&status,|s|{s.connection_issues.insert(id,format!("布局未同步：{e:#}"));});continue;}
-                update(&status,|s|{s.connection_issues.remove(&id);});manager.peers.insert(id,peer);
+                update(&status,|s|{s.connection_issues.remove(&id);});manager.cancelled.remove(&id);manager.peers.insert(id,peer);
                 let settings=crate::settings_sync::snapshot(&manager.config);
                 for id in manager.peers.keys() {manager.send(id,Message::Settings(settings.clone()))?;}
                 manager.publish();
@@ -1112,7 +1187,7 @@ pub async fn run(
                 if !manager.peers.get(&id).is_some_and(|p|p.generation==generation){continue;}
                 manager.peers.get_mut(&id).unwrap().last_seen=Instant::now();
                 let handled=match result {Ok(m)=>manager.message(&id,queued,m).await,Err(e)=>Err(e)};
-                if let Err(e)=handled {manager.cancel()?;manager.peers.remove(&id);update(&status,|s|{s.connection_issues.insert(id.clone(),format!("{e:#}"));});manager.publish();}
+                if let Err(e)=handled {manager.cancel()?;manager.peers.remove(&id);manager.cancelled.remove(&id);update(&status,|s|{s.connection_issues.insert(id.clone(),format!("{e:#}"));});manager.publish();}
             },
             Event::Failed(id,error)=>{if !manager.peers.contains_key(&id){update(&status,|s|{s.connection_issues.insert(id,error);});}},
         }}
@@ -1155,6 +1230,195 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn test_manager() -> (Manager, mpsc::Receiver<(Instant, Message)>) {
+        let config = Config {
+            sharing: true,
+            ..Config::default()
+        };
+        let status = Arc::new(std::sync::Mutex::new(Status {
+            local_addresses: vec![],
+            local_addresses_error: None,
+            diagnostics_path: None,
+            peer_sharing: BTreeMap::new(),
+            connection_issues: BTreeMap::new(),
+            effective_links: vec![],
+            topology_error: None,
+            observe_only: true,
+            pairing: None,
+            discovery_error: None,
+            last_command: None,
+            enabled: true,
+            state: String::new(),
+            source: None,
+            active: None,
+            topology: vec![topology("B")],
+            identity: "B".into(),
+            certificate: vec![],
+            trusted: vec![],
+            rtt_ms: None,
+            last_error: None,
+            received: 0,
+            config: config.clone(),
+            discovered: vec![],
+        }));
+        let (tx, sent) = mpsc::channel(32);
+        let peer = Peer {
+            sharing: true,
+            generation: 1,
+            preferred: true,
+            topology: topology("A"),
+            pair_layout: PairLayout {
+                revision: 0,
+                author: "A".into(),
+                links: vec![],
+            },
+            settings: crate::settings_sync::snapshot(&config),
+            tx,
+            last_seen: Instant::now(),
+            pings: Pings::default(),
+            _tasks: Tasks(vec![]),
+        };
+        let (_, actions) = mpsc::channel(1);
+        (
+            Manager {
+                id: "B".into(),
+                config,
+                status,
+                peers: BTreeMap::from([("A".into(), peer)]),
+                source: None,
+                receiver: None,
+                actions,
+                ownership: Ownership::default(),
+                cancelled: BTreeMap::new(),
+                pending: None,
+                active: "B".into(),
+                epoch: 0,
+                sequence: 0,
+                waiting_release: None,
+                incoming_epoch: None,
+                prepared_epoch: None,
+                observe_only: true,
+                started: Instant::now(),
+                renewal: 0,
+                retry_after: Instant::now(),
+                restart_requested: false,
+            },
+            sent,
+        )
+    }
+    #[tokio::test]
+    async fn local_takeover_drains_old_input_without_losing_peer_connection() {
+        let (mut manager, mut sent) = test_manager();
+        let claim = Claim {
+            origin: "A".into(),
+            nonce: 42,
+        };
+        manager
+            .ownership
+            .request("A", claim.clone(), manager.neighbors(), 0);
+        manager.incoming_epoch = Some(3);
+        manager.cancel().unwrap();
+        assert!(matches!(sent.recv().await.unwrap().1, Message::Cancel(c) if c == claim));
+        let packet = InputPacket {
+            source: "A".into(),
+            session: 42,
+            epoch: 3,
+            sequence: 7,
+            event: InputEvent::Move {
+                position: Point { x: 100., y: 100. },
+                topology_version: 1,
+            },
+        };
+        // This packet was already on the wire when B moved its own mouse.
+        manager
+            .message(
+                "A",
+                Instant::now() - Duration::from_secs(2),
+                Message::Input(packet.clone()),
+            )
+            .await
+            .unwrap();
+        manager
+            .message(
+                "A",
+                Instant::now(),
+                Message::Activate {
+                    epoch: 3,
+                    topology_version: 1,
+                    position: Point::default(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(manager.peers.contains_key("A"));
+        assert_eq!(manager.status.lock().unwrap().received, 0);
+        assert!(manager.config.sharing);
+        assert!(manager.source.is_none() && manager.receiver.is_none());
+        let mut wrong = packet.clone();
+        wrong.source = "other".into();
+        assert!(manager
+            .message("A", Instant::now(), Message::Input(wrong))
+            .await
+            .is_err());
+        let mut wrong = packet.clone();
+        wrong.session = 43;
+        assert!(manager
+            .message("A", Instant::now(), Message::Input(wrong))
+            .await
+            .is_err());
+        manager
+            .message(
+                "A",
+                Instant::now(),
+                Message::Cancelled(Claim {
+                    origin: "A".into(),
+                    nonce: 41,
+                }),
+            )
+            .await
+            .unwrap();
+        assert!(!manager.cancelled.is_empty());
+        manager
+            .message("A", Instant::now(), Message::Cancelled(claim))
+            .await
+            .unwrap();
+        assert!(manager.cancelled.is_empty());
+        // Traffic after the ordered cancellation ACK is not part of the drain.
+        assert!(manager
+            .message("A", Instant::now(), Message::Input(packet))
+            .await
+            .is_err());
+    }
+    #[tokio::test]
+    async fn new_crossing_waits_for_previous_cancellation_acknowledgement() {
+        let (mut manager, mut sent) = test_manager();
+        let old = Claim {
+            origin: "B".into(),
+            nonce: 17,
+        };
+        manager.ownership.begin(old.clone(), manager.neighbors(), 0);
+        manager.active = "A".into();
+        manager.epoch = 2;
+        manager.cancel().unwrap();
+        sent.recv().await.unwrap();
+        manager.pending = Some(("A".into(), 1, Point::default()));
+        manager.reserve_pending().unwrap();
+        assert!(manager.ownership.claim().is_none());
+        manager
+            .message("A", Instant::now(), Message::Activated { epoch: 2 })
+            .await
+            .unwrap();
+        assert!(manager
+            .message("A", Instant::now(), Message::Activated { epoch: 99 })
+            .await
+            .is_err());
+        manager
+            .message("A", Instant::now(), Message::Cancelled(old))
+            .await
+            .unwrap();
+        assert!(matches!(sent.recv().await.unwrap().1, Message::Claim(c) if c.origin == "B"));
+        assert!(manager.ownership.claim().is_some());
+    }
     #[test]
     fn pong_must_match_a_request_and_an_enabled_screen() {
         let topology = topology("B");

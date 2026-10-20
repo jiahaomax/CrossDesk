@@ -56,4 +56,24 @@ Windows 命令：
 
 本机及另一台 Windows 都解压整个包，运行 `crossdesk-test-desktop.exe`。Mac 选择对应芯片 ZIP，解压后打开 `CrossDesk Test.app`，不编译。两端退出旧测试版后运行新包，不运行清理工具，既有测试配对保留。正式版保持隔离。
 
-最终打包和包内检查结果在下面补充。
+Windows rc14 已构建；ZIP 5,211,180 字节。包内 smoke、两个真实 observe-only 后台加两个浏览器界面的自动保存同步、测试数据隔离/清理、空账本守护退出均通过。隔离验证只清理脚本创建的临时测试配置，未清理用户配置。
+
+补充执行并通过：
+
+```powershell
+node scripts/test-pairing.mjs dist/CrossDesk-Test-0.3.0-rc14-Windows-x64/crossdesk-test-daemon.exe --autosave-ui
+node scripts/check-test-edition.mjs dist/CrossDesk-Test-0.3.0-rc14-Windows-x64/crossdesk-test-daemon.exe
+node scripts/test-guard-lifecycle.mjs dist/CrossDesk-Test-0.3.0-rc14-Windows-x64/crossdesk-test-daemon.exe
+node scripts/check-ui.mjs
+$env:UI_CAPTURE_DIRECTORY='output/playwright/autosave-full-2026-10-19'
+node scripts/check-ui-refresh-browser.mjs
+$env:CAPTURE_PREFIX='rc14'
+node scripts/check-network-settings-browser.mjs dist/CrossDesk-Test-0.3.0-rc14-Windows-x64/crossdesk-test-daemon.exe
+node scripts/check-displays-browser.mjs dist/CrossDesk-Test-0.3.0-rc14-Windows-x64/crossdesk-test-daemon.exe --fixtures
+```
+
+完整浏览器回归产生 64 张标注截图、11 组交互检查，无运行错误；包含 1600×1000、明暗、多设备/竖屏/镜像/负坐标、配对等待与失败、后台不可用、长名称/长错误、macOS/Ubuntu 前端和 DPR 1.25/1.5/2。显式测试标签移至页脚中间，避免遮挡保存失败的重试入口。已目视检查关键设置、工作区、方向弹窗、失败页和真实系统屏幕数据截图。`check-ui` 的 28 组几何检查通过。真实后台网络复选框键盘操作自动落盘、重载保留；真实 Windows 屏幕渲染/刷新与焦点/视口保持通过。旧脚本迁移时修正了一处拖动步骤丢失，以及旧刷新文案和隐藏调试参数的断言；修正后通过。
+
+本轮源代码在独立 worktree 的 `codex/macos-test-rc14` 提交 `0735bcb0089e0f0c82abda17903a98f10af25969`，依既有授权推送用于 Mac 构建。主工作区仍为 main / 90c357a，未提交或推送主分支。只上传源码、文档和构建/测试脚本，无用户配置、证书、日志或旧包。
+
+Mac 构建：[39271173832](https://github.com/jiahaomax/CrossDesk/actions/runs/39271173832)。Apple 芯片 job 118123544442 已成功，4 分 49 秒；92 项 Rust 测试通过、1 ignored，应用构建、严格签名检查及真实钥匙串清理/正式版哨兵保留通过。下载后核对外层 artifact 摘要、内层 ZIP、App 标识、ARM64 Mach-O 和执行权限，保留 Mac 原始 ZIP，不在 Windows 重打包。ARM ZIP 5,321,649 字节。Intel job 118123544808 同样成功，8 分 11 秒，92 项测试通过、1 ignored；App、签名和钥匙串隔离检查通过。下载后完成相同完整性、架构和权限检查，Intel ZIP 5,656,383 字节。两个 Mac 包为临时签名、未公证；实体 Mac 首次打开、权限和键鼠手感仍需用户主动验证。
