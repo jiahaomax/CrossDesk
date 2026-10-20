@@ -626,16 +626,24 @@ mod tests {
             modifiers: ModifierState::default(),
         };
         unsafe {
-            let e = CGEventCreateKeyboardEvent(null(), 59, true);
-            assert!(!e.is_null());
-            CGEventSetFlags(e, 1 << 18);
-            event_callback(null_mut(), 12, e, &mut context as *mut _ as _);
-            CGEventSetIntegerValueField(e, 42, crate::INJECTION_TAG as i64);
-            CGEventSetFlags(e, 0);
-            event_callback(null_mut(), 12, e, &mut context as *mut _ as _);
-            CGEventSetIntegerValueField(e, 42, 0);
-            event_callback(null_mut(), 12, e, &mut context as *mut _ as _);
-            CFRelease(e);
+            for (flags, tagged, expected_count) in
+                [(1 << 18, false, 1), (0, false, 2), (0, true, 2)]
+            {
+                // Each physical callback receives a distinct event. Do not
+                // reuse a tagged Quartz object as a later physical event.
+                let e = CGEventCreateKeyboardEvent(null(), 59, flags != 0);
+                assert!(!e.is_null());
+                CGEventSetFlags(e, flags);
+                if tagged {
+                    CGEventSetIntegerValueField(e, 42, crate::INJECTION_TAG as i64);
+                }
+                let actual_tag = CGEventGetIntegerValueField(e, 42);
+                let actual_key = CGEventGetIntegerValueField(e, 9);
+                event_callback(null_mut(), 12, e, &mut context as *mut _ as _);
+                CFRelease(e);
+                assert_eq!(received.lock().unwrap().len(), expected_count,
+                    "flags={flags:#x}, tagged={tagged}, actual_tag={actual_tag:#x}, key={actual_key}");
+            }
         }
         let events = received.lock().unwrap();
         assert_eq!(events.len(), 2);
