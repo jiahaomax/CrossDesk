@@ -527,8 +527,8 @@ impl Manager {
     }
     fn cancel(&mut self) -> Result<()> {
         if let Some(c) = self.ownership.claim().cloned() {
-            self.remember_cancelled(&c);
             let effects = self.ownership.cancel(&c);
+            self.remember_cancelled(&c, &effects);
             self.effects(effects)?;
         } else {
             self.reset_native();
@@ -536,8 +536,11 @@ impl Manager {
         self.publish();
         Ok(())
     }
-    fn remember_cancelled(&mut self, claim: &Claim) {
-        for peer in self.peers.keys() {
+    fn remember_cancelled(&mut self, claim: &Claim, effects: &[Effect]) {
+        for peer in effects.iter().filter_map(|e| match e {
+            Effect::Cancel(peer, _) => Some(peer),
+            _ => None,
+        }) {
             let mut outgoing_epochs = vec![];
             if &self.active == peer {
                 outgoing_epochs.push(self.epoch);
@@ -947,8 +950,8 @@ impl Manager {
                         })?;
                         // Keep this source session alive to consume the switching Ctrl-up.
                         if let Some(c) = self.ownership.claim().cloned() {
-                            self.remember_cancelled(&c);
                             let effects = self.ownership.cancel(&c);
+                            self.remember_cancelled(&c, &effects);
                             for effect in effects {
                                 if let Effect::Cancel(id, c) = effect {
                                     let _ = self.send(&id, Message::Cancel(c));
@@ -1418,6 +1421,34 @@ mod tests {
             .unwrap();
         assert!(matches!(sent.recv().await.unwrap().1, Message::Claim(c) if c.origin == "B"));
         assert!(manager.ownership.claim().is_some());
+    }
+    #[tokio::test]
+    async fn paused_connected_peer_does_not_block_local_takeover_or_next_crossing() {
+        let (mut manager, mut sent) = test_manager();
+        let (mut extra, _unused) = test_manager();
+        let mut paused = extra.peers.remove("A").unwrap();
+        paused.topology = topology("C");
+        paused.sharing = false;
+        manager.peers.insert("C".into(), paused);
+        let old = Claim {
+            origin: "B".into(),
+            nonce: 18,
+        };
+        manager.ownership.begin(old.clone(), manager.neighbors(), 0);
+        manager.cancel().unwrap();
+        assert_eq!(
+            manager.cancelled.keys().cloned().collect::<Vec<_>>(),
+            vec!["A"]
+        );
+        sent.recv().await.unwrap();
+        manager.pending = Some(("A".into(), 1, Point::default()));
+        manager
+            .message("A", Instant::now(), Message::Cancelled(old))
+            .await
+            .unwrap();
+        assert!(manager.cancelled.is_empty());
+        assert!(manager.ownership.claim().is_some());
+        assert!(matches!(sent.recv().await.unwrap().1, Message::Claim(c) if c.origin == "B"));
     }
     #[test]
     fn pong_must_match_a_request_and_an_enabled_screen() {
