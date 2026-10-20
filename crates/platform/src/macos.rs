@@ -385,10 +385,10 @@ pub fn inject(event: &InputEvent) -> Result<()> {
             }
             InputEvent::Move { position, .. } => create_mouse_event(next_mouse.motion(*position)),
             InputEvent::Button { button, down } => {
-                let p = match next_mouse.position {
-                    Some(p) => p,
-                    None => cursor()?,
-                };
+                // A physical takeover can move the cursor before the guardian
+                // releases its ledger. Release at the current cursor rather
+                // than dragging it back to the last remote position.
+                let p = cursor()?;
                 create_mouse_event(
                     next_mouse
                         .button(*button, *down, p)

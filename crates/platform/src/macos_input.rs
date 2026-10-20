@@ -55,7 +55,7 @@ pub(crate) struct MouseEvent {
 
 #[derive(Clone, Default)]
 pub(crate) struct MouseState {
-    pub position: Option<Point>,
+    position: Option<Point>,
     buttons: [bool; 5],
     numbers: [i64; 5],
     next_number: i64,
@@ -89,7 +89,7 @@ impl MouseState {
         }
     }
 
-    pub fn button(&mut self, button: u8, down: bool, fallback: Point) -> Option<MouseEvent> {
+    pub fn button(&mut self, button: u8, down: bool, position: Point) -> Option<MouseEvent> {
         if !(1..=5).contains(&button) {
             return None;
         }
@@ -99,7 +99,6 @@ impl MouseState {
             self.numbers[index] = self.next_number;
         }
         self.buttons[index] = down;
-        let position = self.position.unwrap_or(fallback);
         self.position = Some(position);
         Some(MouseEvent {
             kind: match (index, down) {
@@ -152,7 +151,7 @@ mod tests {
     }
 
     #[test]
-    fn move_press_drag_release_uses_one_position_and_event_number() {
+    fn move_press_drag_release_uses_matching_event_number_and_live_release_position() {
         for (button, drag) in [(1, 6), (2, 7), (3, 27), (4, 27), (5, 27)] {
             let mut state = MouseState::default();
             let p = Point {
@@ -160,8 +159,7 @@ mod tests {
                 y: 200.25,
             };
             assert_eq!(state.motion(p).kind, 5);
-            // A queued Quartz post may not yet be reflected by cursor().
-            let down = state.button(button, true, Point::default()).unwrap();
+            let down = state.button(button, true, p).unwrap();
             assert_eq!(down.position, p);
             assert!(down.number > 0);
             for _ in 0..3 {
@@ -172,14 +170,10 @@ mod tests {
                 assert_eq!((moved.kind, moved.button), (drag, (button - 1) as u32));
                 assert_eq!(moved.number, down.number);
             }
-            let up = state.button(button, false, Point::default()).unwrap();
-            assert_eq!(
-                up.position,
-                Point {
-                    x: -395.5,
-                    y: 220.25
-                }
-            );
+            // A target's own mouse may have taken over before safety release.
+            let local = Point { x: 100., y: 50. };
+            let up = state.button(button, false, local).unwrap();
+            assert_eq!(up.position, local);
             assert_eq!(up.number, down.number);
             assert!(!up.pressed);
             assert_eq!(state.motion(p).kind, 5);
